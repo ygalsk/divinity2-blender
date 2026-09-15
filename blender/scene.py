@@ -11,7 +11,10 @@ a heap.
 """
 
 import bpy
+import numpy as np
 from mathutils import Matrix, Vector
+
+from ..divinity2 import skin as dv2_skin
 
 #: Game units per metre. The game's own unit is roughly a centimetre; this is
 #: the factor that puts a character at a believable height in Blender. It is a
@@ -46,12 +49,40 @@ def _is_shape(block) -> bool:
     return type(block).__name__ in ("NiTriShape", "NiTriStrips")
 
 
+def rest_matrices(skeleton_root, shapes=()) -> dict:
+    """Every bone's rest transform, in game units, keyed by name.
+
+    The skin's bind pose wins wherever there is one: it is the pose the weights
+    were painted against. The skeleton file fills in the bones no shape
+    mentions, so the armature is still complete and the clips still have
+    something to drive.
+
+    In game units on purpose -- the skin data that meets these matrices is in
+    game units too, and converting to metres first would leave the two halves
+    of the same equation on different scales.
+    """
+    out = dict(dv2_skin.bind_poses(shapes))
+    for node, world, _parent in walk(skeleton_root):
+        if _is_shape(node):
+            continue
+        name = str(node.name)
+        if name:
+            out.setdefault(name, np.array(world))
+    return out
+
+
 # --------------------------------------------------------------------------
 # the armature
 
 
-def build_armature(skeleton_root, name: str, scale: float):
-    """One armature from the skeleton's NiNode tree, bone transforms kept."""
+def build_armature(skeleton_root, name: str, scale: float, rest: dict | None = None):
+    """One armature from the skeleton's NiNode tree.
+
+    The tree gives the hierarchy -- which bone parents which -- and `rest`
+    gives where each bone stands. They come from different places on purpose:
+    the parentage is only in the skeleton file, the pose is only trustworthy
+    in the skin.
+    """
     armature = bpy.data.armatures.new(name)
     obj = bpy.data.objects.new(name, armature)
     bpy.context.collection.objects.link(obj)
@@ -72,7 +103,10 @@ def build_armature(skeleton_root, name: str, scale: float):
         # length; the matrix carries the real orientation.
         bone.head = (0.0, 0.0, 0.0)
         bone.tail = (0.0, 0.1, 0.0)
-        bone.matrix = _scaled(world, scale)
+        placed = world
+        if rest is not None and bone_name in rest:
+            placed = Matrix(rest[bone_name].tolist())
+        bone.matrix = _scaled(placed, scale)
 
         if parent is not None:
             bone.parent = edit_bones.get(str(parent.name))
@@ -92,12 +126,24 @@ def _scaled(world: Matrix, scale: float) -> Matrix:
 # the meshes
 
 
-def build_mesh(shape, world: Matrix, scale: float):
-    """One NiTriShape as one Blender object, with its own transform."""
+def build_mesh(shape, world: Matrix, scale: float, rest: dict | None = None):
+    """One NiTriShape as one Blender object, with its own transform.
+
+    A skinned shape is not placed by its node transform. Its geometry lives in
+    skin space and is carried entirely by the bones, so it is moved into the
+    armature's rest pose here and the object then sits at the origin. Placing
+    it by its node transform as well applies the offset twice.
+    """
     data = shape.data
     name = str(shape.name) or "shape"
 
-    vertices = [(v.x * scale, v.y * scale, v.z * scale) for v in data.vertices]
+    raw = np.array([(v.x, v.y, v.z) for v in data.vertices], dtype=np.float64)
+    moved = dv2_skin.to_rest_pose(raw, shape, rest) if rest else None
+    if moved is not None:
+        raw = moved
+        world = Matrix.Identity(4)
+
+    vertices = (raw * scale).tolist()
     faces = [(t.v_1, t.v_2, t.v_3) for t in data.triangles]
 
     mesh = bpy.data.meshes.new(name)
@@ -141,3 +187,27 @@ def bind_skin(obj, shape, armature_obj) -> int:
     modifier.object = armature_obj
     obj.parent = armature_obj
     return len(bones)
+
+
+def attach_to_bone(obj, armature_obj, bone_name: str) -> bool:
+    """Carry a weapon on one bone instead of deforming it with the skeleton.
+
+    Blender parents a child to a bone's *tail*, so the child has to be moved
+    back along the bone's own length, or the weapon floats a bone's length away
+    from the hand holding it.
+    """
+    bone = armature_obj.data.bones.get(bone_name)
+    if bone is None:
+        return False
+
+    world = obj.matrix_world.copy()
+    obj.parent = armature_obj
+    obj.parent_type = "BONE"
+    obj.parent_bone = bone_name
+    obj.matrix_world = (
+        armature_obj.matrix_world
+        @ Matrix.Translation(bone.tail_local - bone.head_local).inverted()
+        @ bone.matrix_local
+        @ world
+    )
+    return True

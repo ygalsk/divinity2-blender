@@ -101,3 +101,18 @@ def read_character(path: str | Path) -> Character:
                 )
 
     return character
+
+
+def read_clips(path: str | Path) -> list[Clip]:
+    """The clips in a standalone `.kf` file, as a family's shared set holds."""
+    nif = read_nif(path)
+    return [
+        Clip(
+            name=str(s.name),
+            start=s.start_time,
+            stop=s.stop_time,
+            sequence=s,
+        )
+        for s in nif.blocks
+        if type(s).__name__ == "NiControllerSequence"
+    ]
