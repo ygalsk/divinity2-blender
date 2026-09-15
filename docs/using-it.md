@@ -53,7 +53,7 @@ lights and the triggers, in one go.
   are authored three times.
 - The tick boxes choose what to build. Triggers and the vegetation library are
   off by default: triggers are wireframe volumes that get in the way, and the
-  vegetation library arrives unplaced (`docs/regions.md`, section 9).
+  vegetation library arrives unplaced (`docs/regions.md`, section 10).
 
 Each kind lands in its own collection — `Banditcamp scenery`,
 `Banditcamp light`, and so on — so you can switch off what you are not working

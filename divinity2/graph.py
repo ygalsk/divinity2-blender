@@ -29,6 +29,14 @@ engine is unambiguous: `NiAVObject::GetAppCulled` is
 **Which child of a chooser.** `NiLODNode` is a `NiSwitchNode`, and one child
 is active at a time. See `divinity2.lod`.
 
+**The markers the region reader looks for.** `CRegionVisual::ParseRegionNode`
+reads a node's `NiStringExtraData` and turns some of them into something that
+is not geometry at all: `effectproxy = yes` becomes a particle system loaded
+from `Win32\\Effects\\` and the box that marked it is never drawn, `glowproxy`
+becomes a `CGlowEffect`, and a node whose name starts `PhysicsPROXY_` is a
+collision hull. Those markers are inherited by everything beneath, so the walk
+carries them down with the rest.
+
 The game uses six node types and no more: `NiNode`, `NiTriShape`,
 `NiParticleSystem`, `NiLODNode`, `NiBillboardNode`, `NiSortAdjustNode`.
 """
@@ -44,6 +52,18 @@ SHAPES = ("NiTriShape", "NiTriStrips")
 
 #: A chooser: one child is active, the rest are not drawn.
 SWITCH = ("NiLODNode", "NiSwitchNode")
+
+#: A marker, and what the engine builds from the node instead of a mesh.
+#: From `CRegionVisual::ParseRegionNode`; `docs/regions.md` has the whole
+#: table, of which these are the ones that replace the geometry outright.
+PROXY = {
+    "effectproxy": "an effect spawns here",
+    "glowproxy": "a glow spawns here",
+}
+
+#: The one marker the engine reads off the name, not off extra data:
+#: `NiString::Contains(name, "PhysicsPROXY_", 0, 13)`.
+PHYSICS_PROXY = "PhysicsPROXY_"
 
 #: Shape names the artists left on the export, which say nothing about what
 #: the thing is. A quarter of the game's drawn shapes are called
@@ -65,6 +85,7 @@ class Drawable:
     properties: dict           #: the resolved state, by property class name
     hidden: bool = False       #: drawn by the game, but not at this distance
     reason: str = ""           #: why it is hidden
+    markers: dict = field(default_factory=dict)  #: the node's string extra data
 
     @property
     def data(self):
@@ -93,6 +114,24 @@ def _children(node):
     return [c for c in (getattr(node, "children", ()) or []) if c is not None]
 
 
+def _markers(node) -> dict:
+    return {
+        str(e.name): str(e.string_data)
+        for e in (getattr(node, "extra_data_list", ()) or [])
+        if e is not None and type(e).__name__ == "NiStringExtraData"
+    }
+
+
+def _proxy(markers: dict, path: str):
+    """Why the engine builds something other than a mesh here, or None."""
+    for name, why in PROXY.items():
+        if markers.get(name) == "yes":
+            return why
+    if PHYSICS_PROXY in path:
+        return "a collision hull"
+    return None
+
+
 def _properties(node) -> dict:
     return {
         type(p).__name__: p
@@ -115,9 +154,9 @@ def walk(root, keep_hidden: bool = True):
     detail -- is yielded with `hidden` set, because it is real geometry and a
     modder may want it.
     """
-    stack = [(root, np.eye(4), {}, "", False, "")]
+    stack = [(root, np.eye(4), {}, {}, "", False, "")]
     while stack:
-        node, parent_world, inherited, above, hidden, reason = stack.pop()
+        node, parent_world, inherited, marked, above, hidden, reason = stack.pop()
 
         if lod.is_culled(node):
             continue
@@ -126,6 +165,7 @@ def walk(root, keep_hidden: bool = True):
         # PushLocalProperties: the inherited state, then this node's own on
         # top, one slot per property type.
         state = {**inherited, **_properties(node)}
+        marks = {**marked, **_markers(node)}
         own = _named(node)
         path = f"{above}/{str(node.name)}" if above else str(node.name)
 
@@ -135,7 +175,10 @@ def walk(root, keep_hidden: bool = True):
             if data is None or not data.num_vertices:
                 continue
             why, invisible = reason, hidden
-            if lod.is_hidden(node):
+            proxy = _proxy(marks, path)
+            if proxy is not None:
+                why, invisible = proxy, True
+            elif lod.is_hidden(node):
                 why, invisible = "NiHide", True
             elif not lod.is_nearest(node):
                 why, invisible = "a coarser level of detail", True
@@ -147,6 +190,7 @@ def walk(root, keep_hidden: bool = True):
                 properties=state,
                 hidden=invisible,
                 reason=why,
+                markers=marks,
             )
             continue
 
@@ -154,12 +198,12 @@ def walk(root, keep_hidden: bool = True):
         if kind in SWITCH:
             show, rest = lod.lod_children(node)
             for child in reversed(rest):
-                stack.append((child, world, state, path, True,
+                stack.append((child, world, state, marks, path, True,
                               "a coarser level of detail"))
             children = [show] if show is not None else []
 
         for child in reversed(children):
-            stack.append((child, world, state, path, hidden, reason))
+            stack.append((child, world, state, marks, path, hidden, reason))
 
 
 def _last_named(path: str) -> str:

@@ -34,6 +34,22 @@ WATTS = 40.0
 #: How big an empty stands in for a point, in metres.
 MARKER = 0.25
 
+#: A sun's `dimmer` is a 0..1 multiplier too, and Blender's sun is an
+#: irradiance in W/m^2. Blender's own default for daylight is 1.0 and the
+#: game's rock is dark, so the sun is given this many watts per unit of
+#: dimmer. A convenience, like `WATTS`; `dv2_dimmer` keeps the real value.
+SUN_WATTS = 4.0
+
+#: How much of the sun's authored `ambient_color` becomes Blender's world.
+#: The game applies ambient per material, Blender applies it as an
+#: environment, so the two cannot be equal. This is the fraction that does
+#: not wash the scene out.
+AMBIENT = 0.12
+
+
+#: Ask for every sub-region, not just one.
+ALL = "*"
+
 
 @dataclass
 class Built:
@@ -45,11 +61,13 @@ class Built:
     unresolved: int = 0
 
 
-def _collection(name: str):
+def _named(name: str, made: list | None = None):
     found = bpy.data.collections.get(name)
     if found is None:
         found = bpy.data.collections.new(name)
         bpy.context.scene.collection.children.link(found)
+    if made is not None and found not in made:
+        made.append(found)
     return found
 
 
@@ -120,7 +138,7 @@ def _light(placed, into):
     into.objects.link(obj)
 
     if shape == "sun":
-        data.energy = dimmer
+        data.energy = dimmer * SUN_WATTS
         basis = dv2_region.sun_basis(placed.fields.get("angle_y", 0.0),
                                      placed.fields.get("angle_z", 0.0))
         # The light travels along the basis' -X; a Blender sun shines along
@@ -177,20 +195,43 @@ def _tree(placed, into):
     return obj
 
 
-def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
-                  kinds=KINDS, cache=None) -> Built:
-    """Build one region, or the parts of it `kinds` asks for."""
-    game_root = Path(game_root)
+def _world(placed):
+    """The sky, from the sun's own `ambient_color`.
+
+    Without one a region renders almost black: the game lights every surface
+    with an ambient term and Blender has no ambient unless a world provides
+    it.
+    """
+    world = bpy.context.scene.world
+    if world is None:
+        world = bpy.data.worlds.new("Divinity II")
+        bpy.context.scene.world = world
+    world.use_nodes = True
+    background = world.node_tree.nodes.get("Background")
+    if background is None:
+        return world
+    ambient = placed.fields.get("ambient", (0.0, 0.0, 0.0))
+    background.inputs[0].default_value = tuple(ambient) + (1.0,)
+    background.inputs[1].default_value = AMBIENT * float(placed.fields.get("dimmer", 1.0))
+    world["dv2_ambient"] = ambient
+    return world
+
+
+def _one(game_root, name: str, sub: str, time: str, kinds, cache,
+         built: Built, library: dict) -> list:
+    """Build one sub-region into its own collections. Returns them."""
     read = dv2_region.read(game_root, name, sub, time)
-    built = Built()
-    library = {}
+    made = []
     templates = None
+
+    def _collection(label):
+        return _named(f"{name} {sub} {label}", made)
 
     def count(kind):
         built.counts[kind] = built.counts.get(kind, 0) + 1
 
     if "terrain" in kinds and read.statics is not None:
-        into = _collection(f"{name} terrain")
+        into = _collection("terrain")
         was = set(bpy.data.objects)
         import_asset(read.statics, game_root, cache=cache, with_animation=False)
         for obj in [o for o in bpy.data.objects if o not in was]:
@@ -205,9 +246,9 @@ def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
         want = read.of(kind)
         if not want:
             continue
-        into = _collection(f"{name} {kind}")
+        into = _collection(kind)
         if templates is None:
-            templates = _collection(f"{name} models")
+            templates = _collection("models")
             templates.hide_viewport = templates.hide_render = True
         for placed in want:
             if placed.model is None:
@@ -234,13 +275,15 @@ def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
         want = read.of(kind)
         if not want:
             continue
-        into = _collection(f"{name} {kind}")
+        into = _collection(kind)
         for placed in want:
             make(placed, into)
+            if placed.fields.get("shape") == "sun":
+                _world(placed)
             count(kind)
 
     if "vegetation" in kinds and read.vegetation is not None:
-        into = _collection(f"{name} vegetation")
+        into = _collection("vegetation")
         was = set(bpy.data.objects)
         import_asset(read.vegetation, game_root, cache=cache, with_animation=False)
         for obj in [o for o in bpy.data.objects if o not in was]:
@@ -250,4 +293,35 @@ def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
             count("vegetation")
         into.hide_viewport = True
 
+    return made
+
+
+def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
+                  kinds=KINDS, cache=None) -> Built:
+    """Build one region, or -- with `sub=ALL` -- all of its sub-regions.
+
+    **Each sub-region has its own origin.** Banditcamp's cave spans x -155..17
+    while its surface spans -85..185; Broken Valley's Chapel and Farm both sit
+    within ten metres of zero. The engine loads one at a time and joins them
+    with teleport triggers, so they are separate scenes that happen to share a
+    coordinate system by accident, not by design.
+
+    Building them all therefore stacks them. Nothing is moved to hide that --
+    an offset would be geometry the game does not have -- so every sub-region
+    gets its own collections and all but the first arrive switched off.
+    """
+    game_root = Path(game_root)
+    built = Built()
+    library = {}
+    subs = dv2_region.subregions(game_root, name) if sub == ALL else [sub]
+
+    for index, one in enumerate(subs):
+        made = _one(game_root, name, one, time, kinds, cache, built, library)
+        if index and made:
+            layer = bpy.context.view_layer.layer_collection
+            for collection in made:
+                found = layer.children.get(collection.name)
+                if found is not None:
+                    found.exclude = True
+    built.counts["sub-regions"] = len(subs)
     return built

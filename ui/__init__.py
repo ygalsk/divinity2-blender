@@ -9,7 +9,7 @@ from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy.types import AddonPreferences, Operator, Panel
 
 from ..blender.importer import import_asset
-from ..blender.region import KINDS, import_region
+from ..blender.region import ALL, KINDS, import_region
 from ..divinity2 import catalog, region
 
 PACKAGE = __package__.rpartition(".")[0]
@@ -114,7 +114,12 @@ def _region_items(self, context):
 def _sub_items(self, context):
     root = _game_root(context)
     found = region.subregions(root, self.region_name) if root and self.region_name else []
-    return [(n, n, "") for n in found] or [("Main", "Main", "")]
+    items = [(n, n, "") for n in found] or [("Main", "Main", "")]
+    if len(found) > 1:
+        items.append((ALL, f"All {len(found)}",
+                      "Each has its own origin, so all but the first arrive "
+                      "switched off"))
+    return items
 
 
 class DV2_OT_import_region(Operator):

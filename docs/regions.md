@@ -86,7 +86,41 @@ The mesh is not. A scenery `.item` carries the conversion on its own root node
 as a scale of `0.01` (see `docs/assets.md`), so once the add-on has imported
 it the placement's position applies unchanged.
 
-## 4. The built geometry hides one thing and names another
+## 4. The engine's own table for a region node
+
+`CRegionVisual::ParseRegionNode` is the function that walks a region's
+`StaticMeshes.nif` and decides what each node becomes. It is the answer to
+"what is in here that is not geometry", and it is a table, not a guess:
+
+| what it reads | what the node becomes |
+|---|---|
+| `CDummyGeometry` (RTTI) | nothing; the function returns at once |
+| `effectproxy = yes` | a particle system from `Win32\Effects\<EffectFile>`, at the node's world transform, with `CullingDistance`. **The box is not drawn.** |
+| `glowproxy` | a `CGlowEffect` |
+| a name containing `PhysicsPROXY_` | a collision hull |
+| `IsCubeMapPosition`, `CubemapPosition` | a cubemap probe |
+| `IsItemPosition`, `ItemPosition`, `ItemPrototypeName`, `ItemCollectionName` | an item spawn |
+| `IsStatic`, `ExternalAssetPath`, `ASSET` | a streamed asset reference |
+| `TERRAIN_PATCH` | a terrain patch |
+| `Imposter` | a billboard imposter |
+| `River`, `WaterPlane` | a `CWaterPlane` |
+| `decal` | a `CDecalNode` |
+| `ANTIPORTAL_`, `antiportal` | a `CAntiPortal` |
+| `DungeonPR`, `ENTRY-BOX` | an `NiRoom` / `NiShell` — the portal system |
+| `ActiveDistance` | a distance |
+
+`EffectFile` and `CullingDistance` are not attributes: they are `key = value`
+lines inside the node's `UserPropBuffer`, pulled out by
+`DivTools::CGBTools::GetExtraDataValue`. Positions in this function are
+multiplied by `CNifManager::ms_fRescaleSize`.
+
+The add-on reads the three that replace the geometry outright — `effectproxy`,
+`glowproxy` and `PhysicsPROXY_` — and marks those shapes hidden with the
+reason. Across all 19 regions that is 18 shapes of 2,273. The rest of the
+table is read but not acted on yet; the markers are on every object as
+`dv2_*` so nothing is lost.
+
+## 5. The built geometry hides one thing and names another
 
 `StaticMeshes.nif` is the region's own geometry: 14.4 MB and 69 drawn shapes
 in Banditcamp, placed at the origin because its nodes carry full world
@@ -103,9 +137,10 @@ add-on drops those 10, and a culled node takes its subtree with it.
 
 `BC_ShadowHide_01` is the honest gap. Its flags are `0x210`, the same as the
 58 shapes that are drawn; its node flags are `0x310`, the same as the other
-52 nodes; it carries no `UserPropBuffer`; and `shadowHideObject` in the exe is
-a Scaleform text-field property, nothing to do with it. **Only the name says
-what it is, and the add-on does not filter on names.** It comes in visible.
+52 nodes; it carries no `UserPropBuffer` and none of section 4's markers; and
+`shadowHideObject` in the exe is a Scaleform text-field property, nothing to
+do with it. **Only the name says what it is, and the add-on does not invent a
+name test the engine does not have.** It comes in visible.
 
 A third thing was on this list and should not have been. `BC_terrain_*_low`
 is the region's ground, not junk: those patches are the coarse child of an
@@ -116,7 +151,7 @@ Every object keeps its whole node path as `dv2_path`, because the shapes
 themselves are nearly all called `Editable Poly` and the name that means
 something is on a node above.
 
-## 5. The terrain needs both halves of its placement
+## 6. The terrain needs both halves of its placement
 
 A patch ships `Meshes/Terrain/Terrain_Patch_<i>/0.nif`, `1.nif` and sometimes
 `2.nif`. `0.nif` is an `NiLODNode` holding one level inline plus **one empty
@@ -137,7 +172,7 @@ misses `Terrain_Patch_1` by 184 units.
 `NiTexturingProperty` at all — see `divinity2/terrain.py` for the splat
 recipe.
 
-## 6. Lights
+## 7. Lights
 
 `Lights/<time of day>/lights.xml` holds a `point_light` per lamp and one
 `dir_light` for the sun. A point light gives its position under `GBLight` as
@@ -159,7 +194,7 @@ it was measured: over the nine regions that ship a `Day` set,
 −X is the only one that is a sun in every region. The add-on aims Blender's
 sun down that vector.
 
-## 7. Triggers
+## 8. Triggers
 
 `Episodes/<e>/Triggers/*.xml` holds all 5,991 of them, and a file is not one
 region's: each trigger names its own `Region` and `SubRegion` in
@@ -176,7 +211,7 @@ the trigger's one child element is its own label:
 Every corner of a `PolyArea` sits at `Bottom`, so the volume is that polygon
 extruded up to `Top`. The add-on builds exactly that prism, as a wireframe.
 
-## 8. Trees have no mesh, and that is not the reader's fault
+## 9. Trees have no mesh, and that is not the reader's fault
 
 `trees.xml` gives a tree a `uuid`, a `model`, a `variation`, a position and
 three instance floats. `model` names a `CTreeModel` in `forest-settings.xml`,
@@ -207,7 +242,7 @@ Both go to the SpeedTree shader as a trig pair (`g_vTreeRotationTrig`); what
 angle `instance.x` stands for is not resolved, so it is kept as a raw
 `dv2_rotation` and not applied.
 
-## 9. Vegetation is generated, not stored
+## 10. Vegetation is generated, not stored
 
 `Vegetation.nif` is the region's **library** of grass and undergrowth: one
 `NiNode` per source file, named exactly as `vegetationtemplatedata.xml` names
@@ -229,6 +264,6 @@ exactly, and a near-miss looks like a hit.
 - **Water planes.** `UserPropBuffer=WaterPlane` marks them in
   `StaticMeshes.nif` and `Lights/<time>/waterplanedata_v2.xml` describes them;
   neither is read yet.
-- **`BC_ShadowHide_01`**, section 4: no flag explains it.
+- **`BC_ShadowHide_01`**, section 5: no flag explains it.
 - **Physics.** `Physics.nxb` is NVIDIA PhysX 2 `NxuStream` binary — a set of
   collision hulls, nothing visual, and nothing needs it to look right.

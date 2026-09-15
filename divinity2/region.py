@@ -380,6 +380,7 @@ def _light(node, shape: str) -> Placed:
     gb = next(node.find_all("GBLight"), None)
     position = (0.0, 0.0, 0.0)
     colour = (1.0, 1.0, 1.0)
+    ambient = (0.0, 0.0, 0.0)
     dimmer = 1.0
     if gb is not None:
         dimmer = float(gb.get("dimmer", 1.0) or 1.0)
@@ -388,8 +389,10 @@ def _light(node, shape: str) -> Placed:
                 position = _point(child)
             elif child.is_a("diffuse_color"):
                 colour = tuple(float(child.get(k, 1.0)) for k in "rgb")
+            elif child.is_a("ambient_color"):
+                ambient = tuple(float(child.get(k, 0.0)) for k in "rgb")
 
-    fields = dict(shape=shape, dimmer=dimmer, colour=colour)
+    fields = dict(shape=shape, dimmer=dimmer, colour=colour, ambient=ambient)
     if shape == "sun":
         fields["angle_y"] = float(node.get("angle_y", 0.0) or 0.0)
         fields["angle_z"] = float(node.get("angle_z", 0.0) or 0.0)
