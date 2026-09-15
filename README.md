@@ -22,10 +22,11 @@ does not write game files.
 
 ## What does not, yet
 
-- The 162 human characters share a skeleton that is not in their own file, so
-  they arrive without one.
-- Clips are read and named but not yet applied; they are B-spline compressed.
-- A weapon is imported but not attached to the hand it belongs in.
+- 106 of the 324 characters carry mesh files skinned in different poses of the
+  same rig. Each gets its own armature, so nothing shatters, but the pieces do
+  not line up: a FroblinBoss arrives with its body right and its armour beside
+  it. No rigid transform reconciles the two -- see `docs/cat.md`.
+- Root motion is not separated, so a walk cycle treads in place.
 
 ## How it reads the files
 

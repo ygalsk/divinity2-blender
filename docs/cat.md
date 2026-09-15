@@ -88,3 +88,55 @@ This explains both halves at once:
 
 So a character's clips are in two places, and a tool that reads only the `.cat`
 gets a creature that can die but not stand.
+
+## A bone is a node, not a name
+
+Each of a character's mesh files carries its own copy of the skeleton, with
+its own `Scene Root`. The copies are **not in the same pose**.
+`FroblinBoss.nif` and `FroblinBoss_Armor_A.nif` both contain a bone called
+`Bip01 Spine`, and they disagree about where it is by some 800 game units.
+
+Measured over all 324 templates: 317 carry skinned geometry, and **106 of them
+have mesh files whose bind poses disagree by more than 5 units**. Matched by
+node identity, every shape inside one file agrees to within 2.5 units. Matched
+by name across files, they do not agree at all.
+
+This is what makes a character arrive as a heap. Binding every shape to one
+armature by bone name silently mixes two skeletons: the body is placed against
+one pose and the armour against another.
+
+Neither is a rigid offset from the other — hinging the two on the bone where
+they agree best yields the identity, because they agree exactly on some bones
+and not at all on others. They are two different authorings of one rig.
+
+## The rest pose comes from the skin, not the skeleton
+
+The skeleton file is not the pose anything was skinned to. `NiSkinData`
+carries, per bone, the transform that takes a vertex from skin space into that
+bone's space; its inverse is where the bone stood when the weights were
+painted. That is the only pose at which the geometry is undeformed.
+
+The skeleton file disagrees with it — by about 7 units for a Froblin, by
+several hundred for a FroblinBoss — and the skeleton is the one that is wrong,
+because nothing was ever skinned to it. The skeleton is still needed: it is
+the only place the **hierarchy** is written down, and it supplies bones no
+shape mentions.
+
+## Clips are B-splines, not keyframes
+
+A clip stores no keys. It stores the control points of a cubic B-spline,
+quantised to 16-bit integers, and the game evaluates the curve as it plays.
+`Black_Goblin`'s `Stunned` holds 1,158 `NiBSplineCompTransformInterpolator`
+blocks and not one keyframe, which is why a keyframe importer reads it and
+finds nothing at all.
+
+A handle of `0xFFFF` means the track is not animated; the interpolator's own
+static transform is the value for the whole clip. A component that is absent
+is written as `-FLT_MAX`, not left out — `trs_valid`, which is supposed to say
+which of translation, rotation and scale are present, is an **empty array** at
+this version, so the sentinel in the value is the only thing that tells the
+truth.
+
+The control points are not points on the curve. Treating them as keyframes is
+the tempting shortcut and gives an animation that is close but wrong, in a way
+that reads as bad rigging rather than bad maths.

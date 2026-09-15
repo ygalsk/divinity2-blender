@@ -49,7 +49,7 @@ def _is_shape(block) -> bool:
     return type(block).__name__ in ("NiTriShape", "NiTriStrips")
 
 
-def rest_matrices(skeleton_root, shapes=()) -> dict:
+def rest_matrices(skeleton_root, shapes=(), bind: dict | None = None) -> dict:
     """Every bone's rest transform, in game units, keyed by name.
 
     The skin's bind pose wins wherever there is one: it is the pose the weights
@@ -61,7 +61,7 @@ def rest_matrices(skeleton_root, shapes=()) -> dict:
     game units too, and converting to metres first would leave the two halves
     of the same equation on different scales.
     """
-    out = dict(dv2_skin.bind_poses(shapes))
+    out = dict(bind) if bind else dict(dv2_skin.bind_poses(shapes))
     for node, world, _parent in walk(skeleton_root):
         if _is_shape(node):
             continue

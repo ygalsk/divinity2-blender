@@ -136,3 +136,23 @@ def bind_poses(shapes) -> dict:
             if name not in out:
                 out[name] = np.linalg.inv(into_bone)
     return out
+
+
+#: Two bind poses count as the same rig if no shared bone is further apart
+#: than this, in game units. Shapes inside one file agree to about 2.5.
+SAME_POSE = 5.0
+
+
+def same_pose(a: dict, b: dict, tolerance: float = SAME_POSE) -> bool:
+    """Were these two shapes skinned against the same skeleton pose?
+
+    An empty bind matches anything: a shape with no skin has no opinion.
+    """
+    if not a or not b:
+        return True
+    shared = set(a) & set(b)
+    if not shared:
+        return True
+    return all(
+        float(np.abs(a[name] - b[name]).max()) <= tolerance for name in shared
+    )
