@@ -10,7 +10,7 @@ See `docs/cat.md` for the block layout.
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .nif import read_nif
+from .nif import read_nif, world_scale
 
 #: The entry kinds a `.cat` root holds, by their block name without namespace.
 SKELETON = "CSkeletonDataEntry"
@@ -53,6 +53,7 @@ class Character:
     meshes: list[Mesh] = field(default_factory=list)
     clips: list[Clip] = field(default_factory=list)
     animation_set: bytes = b""  # a KFM without its header
+    units_per_metre: float = 100.0  # what the file's `worldScale` says
 
     def clip(self, name: str) -> Clip | None:
         for c in self.clips:
@@ -75,7 +76,9 @@ def read_character(path: str | Path) -> Character:
     except StopIteration:
         raise ValueError(f"{path.name} is not a character template") from None
 
-    character = Character(name=path.stem, path=path)
+    character = Character(
+        name=path.stem, path=path, units_per_metre=world_scale(nif)
+    )
 
     for entry in root.sub_entry_list:
         kind, name = _kind(entry), str(entry.name)

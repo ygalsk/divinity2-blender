@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .dv2-texture-cache/
 *.blend1
+
+# the built extension
+*.zip

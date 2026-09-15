@@ -22,11 +22,19 @@ does not write game files.
 
 ## What does not, yet
 
-- 106 of the 324 characters carry mesh files skinned in different poses of the
-  same rig. Each gets its own armature, so nothing shatters, but the pieces do
-  not line up: a FroblinBoss arrives with its body right and its armour beside
-  it. No rigid transform reconciles the two -- see `docs/cat.md`.
-- Root motion is not separated, so a walk cycle treads in place.
+- Materials carry a diffuse and a normal map and nothing else: no
+  transparency, no vertex colours, no two-sided flag. Hair and capes therefore
+  arrive opaque.
+- The animation set (a KFM) is read by scraping filenames out of it, not by
+  parsing it. Which clip belongs to which weapon set, and how clips blend into
+  each other, is in there and is thrown away.
+- A clip's text keys -- `morph: L_Foot_Down`, and the `v=` values on death
+  animations -- are read but not carried into Blender.
+
+A walk cycle treading in place is **not** on this list. Divinity II clips hold
+no root motion: measured over all 729 clips of the human families, not one
+animates `Reference` or `Reference NonAccum`. The engine moves the character;
+the clip only cycles the legs.
 
 ## How it reads the files
 

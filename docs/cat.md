@@ -89,38 +89,39 @@ This explains both halves at once:
 So a character's clips are in two places, and a tool that reads only the `.cat`
 gets a creature that can die but not stand.
 
-## A bone is a node, not a name
+## Skinning: the skeleton is the rest pose
 
-Each of a character's mesh files carries its own copy of the skeleton, with
-its own `Scene Root`. The copies are **not in the same pose**.
-`FroblinBoss.nif` and `FroblinBoss_Armor_A.nif` both contain a bone called
-`Bip01 Spine`, and they disagree about where it is by some 800 game units.
+A skinned shape stores its vertices in its own node's space. What takes them
+out of it is one matrix per bone, `NiSkinData.bone_list[i].skin_transform`,
+and where that bone stands in the skeleton file:
 
-Measured over all 324 templates: 317 carry skinned geometry, and **106 of them
-have mesh files whose bind poses disagree by more than 5 units**. Matched by
-node identity, every shape inside one file agrees to within 2.5 units. Matched
-by name across files, they do not agree at all.
+    v = Σᵢ wᵢ · Wᵢ · Bᵢ · v
 
-This is what makes a character arrive as a heap. Binding every shape to one
-armature by bone name silently mixes two skeletons: the body is placed against
-one pose and the armour against another.
+`Bᵢ` is the bone's `skin_transform`, `Wᵢ` is the bone's world transform in
+`Win32/Characters/<family>/Skeleton.nif`. That is the whole deformation. It is
+the same formula PyFFI has used for twenty years; nothing about Divinity II is
+special here.
 
-Neither is a rigid offset from the other — hinging the two on the bone where
-they agree best yields the identity, because they agree exactly on some bones
-and not at all on others. They are two different authorings of one rig.
+**`NiSkinData.skin_transform` is not part of it.** It is the inverse of the
+shape node's own world transform. Measured on `FroblinBoss`:
 
-## The rest pose comes from the skin, not the skeleton
+| shape | node world translation | `skin_transform` translation |
+|---|---|---|
+| `FroblinBoss_HI` | (0.0, 2.7, 124.1) | (0.0, −2.7, −124.1) |
+| `FroblinBoss_Armor_A_HI` | (−393.0, −260.9, 79.2) | (393.0, −79.2, −260.9) |
 
-The skeleton file is not the pose anything was skinned to. `NiSkinData`
-carries, per bone, the transform that takes a vertex from skin space into that
-bone's space; its inverse is where the bone stood when the weights were
-painted. That is the only pose at which the geometry is undeformed.
+It says where the geometry came from, not where it goes. Folding it into the
+deformation moves a shape by its own node offset — which is nothing at all for
+a body authored on the origin, and four metres for an armour authored beside
+it. That is the whole reason a character could arrive with a correct body and
+its armour standing next to it, and why the fault looked like two different
+rigs when it was one wrong term.
 
-The skeleton file disagrees with it — by about 7 units for a Froblin, by
-several hundred for a FroblinBoss — and the skeleton is the one that is wrong,
-because nothing was ever skinned to it. The skeleton is still needed: it is
-the only place the **hierarchy** is written down, and it supplies bones no
-shape mentions.
+Each mesh file carries a copy of the skeleton as well, but that copy is
+**collapsed**: every bone node in it sits at the origin. It gives the
+parentage and nothing else. The pose is only in `Skeleton.nif`.
+
+One character, one skeleton, one armature.
 
 ## Clips are B-splines, not keyframes
 

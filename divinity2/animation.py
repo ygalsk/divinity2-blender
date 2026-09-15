@@ -88,6 +88,32 @@ def _as_lists(interpolator):
     )
 
 
+@dataclass
+class Event:
+    """A named moment in a clip, from its `NiTextKeyExtraData`."""
+
+    time: float
+    text: str
+
+
+def events(sequence) -> list[Event]:
+    """What the clip says happens, and when.
+
+    Every clip is bracketed by `start` and `end`. In between the game writes
+    what it needs to act on: `morph: L_Foot_Down` and `morph: R_Foot_Down` on
+    a walk, so a footstep sound lands on the frame the foot does, and `v=-5`
+    through `v=0` on a death, ramping a value to nothing as the body falls.
+
+    They are carried through as pose markers so the timing survives the trip
+    into another engine, where it would otherwise have to be re-authored by
+    eye.
+    """
+    keys = getattr(sequence, "text_keys", None)
+    if keys is None:
+        return []
+    return [Event(time=float(k.time), text=str(k.value)) for k in keys.text_keys]
+
+
 def tracks(sequence) -> list[Track]:
     """One track per controlled block of a `NiControllerSequence`."""
     out = []

@@ -66,17 +66,49 @@ class DV2_OT_import_character(Operator):
         layout.prop(self, "search")
         layout.prop(self, "choice")
 
+    def _resolve(self, context) -> str | None:
+        """The asset to import: the one picked, or the one a name can only mean.
+
+        The enum is only filled in by the dialog, so a script that passes a
+        name alone arrives here with nothing chosen. A name that matches one
+        asset, or matches one exactly, needs no second question.
+        """
+        if self.choice:
+            return self.choice
+        root = _game_root(context)
+        found = catalog.search(root, self.search) if root else []
+        exact = [a for a in found if a.name.lower() == self.search.lower()]
+        if exact:
+            return str(exact[0].path)
+        if len(found) == 1:
+            return str(found[0].path)
+        if found:
+            self.report(
+                {"ERROR"}, f"{len(found)} assets match '{self.search}' -- pick one"
+            )
+        else:
+            self.report({"ERROR"}, f"Nothing matches '{self.search}'")
+        return None
+
     def execute(self, context):
-        if not self.choice:
-            self.report({"ERROR"}, "No asset chosen")
+        chosen = self._resolve(context)
+        if chosen is None:
             return {"CANCELLED"}
 
-        result = import_character(self.choice, _game_root(context))
+        result = import_character(chosen, _game_root(context))
         self.report(
             {"INFO"},
             f"{len(result.objects)} objects, {result.bones} bones, "
             f"{result.skinned} skinned, {result.clips} clips",
         )
+        if result.inferred:
+            # Not a failure, and not a measurement either: worth one warning
+            # so nobody exports a guess believing it came out of the file.
+            self.report(
+                {"WARNING"},
+                f"{', '.join(result.inferred)} placed in the right hand by "
+                f"inference -- the files do not say where a weapon goes",
+            )
         return {"FINISHED"}
 
 

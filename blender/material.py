@@ -13,6 +13,7 @@ from pathlib import Path
 
 import bpy
 
+from ..divinity2 import material as dv2_property
 from ..divinity2 import texture as dv2_texture
 
 #: Which NiTexturingProperty slot means what.
@@ -42,15 +43,39 @@ def cached_image(texture_name: str, game_root: Path, cache: Path):
     return bpy.data.images.load(str(dds), check_existing=True)
 
 
+def _transparency(material, principled, image_node, alpha) -> None:
+    """Wire the diffuse texture's alpha channel the way the game reads it.
+
+    A cut-out (`GREATER` than a threshold) becomes a hard comparison, so the
+    edges stay crisp instead of fading; anything else blends. Additive shapes
+    -- glows and magic planes -- also lose their shadow, which is what
+    `ONE + ONE` means on screen.
+    """
+    tree = material.node_tree
+    if alpha.testing and image_node is not None:
+        compare = tree.nodes.new("ShaderNodeMath")
+        compare.operation = "GREATER_THAN"
+        compare.inputs[1].default_value = alpha.threshold / 255.0
+        tree.links.new(image_node.outputs["Alpha"], compare.inputs[0])
+        tree.links.new(compare.outputs["Value"], principled.inputs["Alpha"])
+        material.surface_render_method = "DITHERED"
+    elif image_node is not None:
+        tree.links.new(image_node.outputs["Alpha"], principled.inputs["Alpha"])
+        material.surface_render_method = "BLENDED"
+    else:
+        material.surface_render_method = "BLENDED"
+
+    if alpha.additive:
+        material.use_transparent_shadow = False
+
+
 def build_material(shape, game_root: Path, cache: Path):
-    """One material per shape, from its NiTexturingProperty."""
-    properties = list(shape.properties or ())
-    texturing = next(
-        (p for p in properties if type(p).__name__ == "NiTexturingProperty"), None
-    )
-    material_property = next(
-        (p for p in properties if type(p).__name__ == "NiMaterialProperty"), None
-    )
+    """One material per shape, from its property blocks."""
+    found = dv2_property.properties(shape)
+    texturing = found.get("NiTexturingProperty")
+    material_property = found.get("NiMaterialProperty")
+    alpha_property = found.get("NiAlphaProperty")
+    specular = found.get("NiSpecularProperty")
 
     name = str(shape.name) or "material"
     material = bpy.data.materials.new(name)
@@ -67,6 +92,12 @@ def build_material(shape, game_root: Path, cache: Path):
             0.0, 1.0 - min(material_property.glossiness / 100.0, 1.0)
         )
 
+    # The game turns specular off per shape; every character shape measured
+    # has it on, so this only ever shows up on the ones that do not.
+    if specular is not None and not int(specular.flags) & 1:
+        principled.inputs["Specular IOR Level"].default_value = 0.0
+
+    diffuse_node = None
     if texturing is not None:
         diffuse = _source_name(texturing, DIFFUSE)
         if diffuse:
@@ -77,6 +108,7 @@ def build_material(shape, game_root: Path, cache: Path):
                 material.node_tree.links.new(
                     node.outputs["Color"], principled.inputs["Base Color"]
                 )
+                diffuse_node = node
 
         normal = _source_name(texturing, NORMAL)
         if normal:
@@ -92,5 +124,10 @@ def build_material(shape, game_root: Path, cache: Path):
                 material.node_tree.links.new(
                     mapping.outputs["Normal"], principled.inputs["Normal"]
                 )
+
+    if alpha_property is not None:
+        decoded = dv2_property.alpha(alpha_property)
+        if decoded.transparent:
+            _transparency(material, principled, diffuse_node, decoded)
 
     return material

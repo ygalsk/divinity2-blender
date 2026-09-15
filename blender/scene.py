@@ -49,19 +49,18 @@ def _is_shape(block) -> bool:
     return type(block).__name__ in ("NiTriShape", "NiTriStrips")
 
 
-def rest_matrices(skeleton_root, shapes=(), bind: dict | None = None) -> dict:
+def rest_matrices(skeleton_root) -> dict:
     """Every bone's rest transform, in game units, keyed by name.
 
-    The skin's bind pose wins wherever there is one: it is the pose the weights
-    were painted against. The skeleton file fills in the bones no shape
-    mentions, so the armature is still complete and the clips still have
-    something to drive.
+    The skeleton file is the rest pose. Each mesh file carries a copy of the
+    skeleton too, but that copy is collapsed -- every bone node in it sits at
+    the origin -- so it gives the parentage and nothing else.
 
-    In game units on purpose -- the skin data that meets these matrices is in
+    In game units on purpose: the skin data that meets these matrices is in
     game units too, and converting to metres first would leave the two halves
     of the same equation on different scales.
     """
-    out = dict(bind) if bind else dict(dv2_skin.bind_poses(shapes))
+    out = {}
     for node, world, _parent in walk(skeleton_root):
         if _is_shape(node):
             continue
@@ -87,9 +86,7 @@ def build_armature(skeleton_root, name: str, scale: float, rest: dict | None = N
     obj = bpy.data.objects.new(name, armature)
     bpy.context.collection.objects.link(obj)
 
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.mode_set(mode="EDIT")
-
+    _edit(obj, True)
     edit_bones = {}
     for node, world, parent in walk(skeleton_root):
         if _is_shape(node):
@@ -112,8 +109,33 @@ def build_armature(skeleton_root, name: str, scale: float, rest: dict | None = N
             bone.parent = edit_bones.get(str(parent.name))
         edit_bones[bone_name] = bone
 
-    bpy.ops.object.mode_set(mode="OBJECT")
+    _edit(obj, False)
     return obj
+
+
+def _edit(obj, on: bool) -> None:
+    """Enter or leave edit mode on `obj`.
+
+    Edit mode is only reachable through an operator, and the operator reads
+    the context rather than its arguments: the object has to be the active one
+    and the view layer has to know about it. `temp_override` states that
+    outright, which is what makes this work when the add-on is driven from a
+    script and `bpy.context` has no active object at all.
+    """
+    view_layer = bpy.context.view_layer
+    active = view_layer.objects.active
+    if on:
+        if active is not None and active.mode != "OBJECT":
+            with bpy.context.temp_override(active_object=active, object=active):
+                bpy.ops.object.mode_set(mode="OBJECT")
+        view_layer.objects.active = obj
+        obj.select_set(True)
+        view_layer.update()
+
+    with bpy.context.temp_override(
+        active_object=obj, object=obj, selected_objects=[obj]
+    ):
+        bpy.ops.object.mode_set(mode="EDIT" if on else "OBJECT")
 
 
 def _scaled(world: Matrix, scale: float) -> Matrix:

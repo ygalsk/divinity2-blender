@@ -118,8 +118,21 @@ def build_action(armature_obj, clip, factor: float, fps: int | None = None):
         bpy.data.actions.remove(action)
         return None
 
+    _mark(action, clip, fps)
     action.frame_range  # realise the range Blender caches
     return action
+
+
+def _mark(action, clip, fps: int) -> None:
+    """The clip's text keys as pose markers on the action.
+
+    A marker carries the name and the frame, which is what another engine
+    needs to hang a footstep or an effect on; the alternative is finding the
+    frame again by eye.
+    """
+    for event in dv2_animation.events(clip.sequence):
+        marker = action.pose_markers.new(event.text)
+        marker.frame = 1 + int(round((event.time - clip.start) * fps))
 
 
 def build_actions(armature_obj, clips, factor: float) -> list:
