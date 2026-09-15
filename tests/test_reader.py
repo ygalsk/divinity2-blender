@@ -12,8 +12,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from divinity2 import catalog, rig, texture
-from divinity2.character import read_character
-from divinity2.nif import is_divinity2, read_nif
+from divinity2.character import read_asset, read_character, read_model
+from divinity2.nif import UNITS_PER_METRE, is_divinity2, read_nif
 
 GAME = Path(os.environ.get("DV2_GAME", ""))
 
@@ -76,6 +76,13 @@ class TestCharacter(unittest.TestCase):
 
 @unittest.skipUnless(GAME.is_dir(), "set DV2_GAME to an install")
 class TestTexture(unittest.TestCase):
+    def test_a_texture_is_found_whatever_the_case(self):
+        """The assets spell their own textures freely; Linux does not."""
+        found = texture.texture_path("btb_rocks_c.dds", GAME)
+        self.assertTrue(found.is_file(), "BTB_Rocks_C.nif should be found")
+        missing = texture.texture_path("no_such_texture_at_all.tga", GAME)
+        self.assertFalse(missing.is_file(), "the index must not invent a file")
+
     def test_a_texture_nif_becomes_a_dds(self):
         path = texture.texture_path("Froblin_A_DM.tga", GAME)
         self.assertTrue(path.exists(), path)
@@ -275,3 +282,119 @@ class TestAnimationSet(unittest.TestCase):
         nif = GAME / "Win32/Characters/Froblin/Skeleton.nif"
         with self.assertRaises(ValueError):
             kfm.read(nif.read_bytes())
+
+
+@unittest.skipUnless(GAME.is_dir(), "set DV2_GAME to an install")
+class TestAsset(unittest.TestCase):
+    """Everything that is not a character: scenery, items, effects, terrain."""
+
+    def test_every_kind_is_indexed(self):
+        kinds = {a.kind for a in catalog.assets(GAME)}
+        self.assertEqual(kinds, set(catalog.KINDS))
+
+    def test_a_chest_arrives_with_geometry(self):
+        chest = read_model(catalog.search(GAME, "chest", kind="item")[0].path)
+        self.assertIsNone(chest.skeleton)  # a chest has no rig
+        self.assertEqual(len(chest.meshes), 1)
+        self.assertTrue(_shapes(chest), "no NiTriShape under the root")
+
+    def test_a_compiled_model_is_one_lod_group(self):
+        """Two groups of one folder are two models, not two halves of one."""
+        groups = catalog.search(GAME, "AL_Statue_A", kind="terrain")
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(
+            sorted(a.name for a in groups),
+            ["AL_Statue_A LODGroup01", "AL_Statue_A LODGroup02"],
+        )
+        statue = read_model(groups[0].path)
+        self.assertEqual(len(statue.meshes), 1)
+        # the finest level, not the first file
+        self.assertEqual(statue.path.name, "LODGroup01")
+
+    def test_a_fortress_carries_its_own_bones(self):
+        """It is skinned, and there is no family skeleton file for it."""
+        fortress = read_model(catalog.search(GAME, "", kind="fortress")[0].path)
+        self.assertIsNotNone(fortress.skeleton)
+        self.assertIsNone(rig.skeleton_path(fortress, GAME))
+
+    def test_read_model_dispatches_on_the_extension(self):
+        cat = catalog.search(GAME, "Black_Goblin")[0].path
+        self.assertTrue(read_model(cat).clips, "a .cat brings its clips")
+        self.assertGreater(len(read_model(cat).meshes), 1)
+
+    def test_the_root_node_states_the_scale(self):
+        """A character leaves `Scene Root` at 1.0; a plain asset bakes 0.01."""
+        goblin = read_model(catalog.search(GAME, "Black_Goblin")[0].path)
+        self.assertEqual(float(goblin.meshes[0].root.scale), 1.0)
+        chest = read_model(catalog.search(GAME, "chest", kind="item")[0].path)
+        self.assertAlmostEqual(float(chest.meshes[0].root.scale), 0.01)
+
+    def test_things_come_out_the_size_they_look(self):
+        """The scale, end to end. Drop either term and this fails.
+
+        `worldScale` was read as the unit until the engine said otherwise, and
+        the result was every piece of scenery in the game at 1/100 of its
+        size -- invisible on a character, because a character's root is 1.0.
+        """
+        for name, kind, low, high in (
+            ("Black_Goblin", "character", 1.0, 2.5),   # a goblin
+            ("IT_Door_Maxos_C", "item", 2.0, 8.0),     # a gate
+            ("P_Damian_Fountain_A", "scenery", 1.0, 8.0),
+        ):
+            with self.subTest(name):
+                size = _metres(read_model(catalog.search(GAME, name, kind=kind)[0].path))
+                self.assertTrue(low <= max(size) <= high, f"{name} is {size}")
+
+    def test_a_texture_nif_is_not_a_model(self):
+        """The negative control: the texture folder holds no geometry."""
+        any_texture = next((GAME / catalog.TEXTURES).glob("*.nif"))
+        with self.assertRaises(ValueError):
+            read_asset(any_texture)
+
+
+def _metres(character):
+    """The model's overall size in metres, by the same rule the importer uses."""
+    import numpy as np
+
+    lo = np.full(3, np.inf)
+    hi = np.full(3, -np.inf)
+    for mesh in character.meshes:
+        factor = 1.0 / (UNITS_PER_METRE * float(mesh.root.scale))
+
+        def walk(node, m):
+            r = node.rotation
+            local = np.eye(4)
+            local[:3, :3] = np.array([
+                [r.m_11, r.m_12, r.m_13],
+                [r.m_21, r.m_22, r.m_23],
+                [r.m_31, r.m_32, r.m_33],
+            ]).T * float(node.scale)
+            local[:3, 3] = (node.translation.x, node.translation.y, node.translation.z)
+            w = m @ local
+            data = getattr(node, "data", None)
+            if type(node).__name__ in ("NiTriShape", "NiTriStrips") and data is not None:
+                if data.num_vertices:
+                    v = np.array([(p.x, p.y, p.z, 1.0) for p in data.vertices]).T
+                    yield (w @ v)[:3].T * factor
+            for child in getattr(node, "children", ()) or ():
+                if child is not None:
+                    yield from walk(child, w)
+
+        for points in walk(mesh.root, np.eye(4)):
+            lo = np.minimum(lo, points.min(0))
+            hi = np.maximum(hi, points.max(0))
+    return (hi - lo).tolist()
+
+
+def _shapes(character):
+    """Every NiTriShape under a character's mesh roots."""
+    out = []
+    stack = [m.root for m in character.meshes]
+    while stack:
+        node = stack.pop()
+        if node is None:
+            continue
+        if type(node).__name__ in ("NiTriShape", "NiTriStrips"):
+            out.append(node)
+        stack += list(getattr(node, "children", ()) or ())
+    return out

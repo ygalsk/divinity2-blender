@@ -30,6 +30,13 @@ NEAREST = 0
 #: would otherwise arrive as a visible lump.
 HIDDEN = "NiHide"
 
+#: Bit 0 of any `NiAVObject`'s flags: the node is culled and never drawn.
+#: The engine is unambiguous -- `NiAVObject::GetAppCulled` is
+#: `return this->m_uFlags & 1;` -- and Divinity II uses it for the physics
+#: and destruction proxies it ships beside real geometry, such as the barrel's
+#: `DESTRUCT_bone_02`, an untextured half-metre cube.
+CULLED = 0x1
+
 
 def _user_prop(shape) -> str:
     for extra in getattr(shape, "extra_data_list", None) or ():
@@ -57,6 +64,11 @@ def is_hidden(shape) -> bool:
         line.strip().rstrip("#") == HIDDEN
         for line in _user_prop(shape).splitlines()
     )
+
+
+def is_culled(node) -> bool:
+    """Does the node's own flag say the engine never draws it?"""
+    return bool(int(getattr(node, "flags", 0) or 0) & CULLED)
 
 
 def is_nearest(shape) -> bool:

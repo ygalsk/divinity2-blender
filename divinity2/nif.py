@@ -35,23 +35,17 @@ def read_nif(path: str | Path):
     return _reader().from_path(Path(path))
 
 
-#: The name of the float the game writes next to every shape, giving the
-#: number of game units in a metre. It reads 100.0 in all 2,956 occurrences
-#: across the 324 character templates -- so the scale is stated, not inferred.
-WORLD_SCALE = "worldScale"
-
-#: What to assume when a file does not carry one.
-DEFAULT_WORLD_SCALE = 100.0
-
-
-def world_scale(nif) -> float:
-    """Game units per metre, as the file states it."""
-    for block in nif.blocks:
-        if type(block).__name__ != "NiFloatExtraData":
-            continue
-        if str(block.name) == WORLD_SCALE and block.float_data > 0.0:
-            return float(block.float_data)
-    return DEFAULT_WORLD_SCALE
+#: Game units in a metre. Every model in the game is authored in
+#: centimetres: a human template comes out 1.87 m, a Maxos gate 4.6 m tall, a
+#: ruined wall 15.7 m long. How many of those units reach the world is on the
+#: tree's root node -- see `blender.importer`.
+#:
+#: The `worldScale` float the files carry next to their shapes is **not**
+#: this. It is a shader input: `DivStandardMaterial::HandleNormalMap` binds it
+#: as a material-node variable beside `LocalScale`, and
+#: `CShadingTools::SetupStandardData` overwrites the authored value with 1.0
+#: before drawing. The engine never reads it as a unit, and neither do we.
+UNITS_PER_METRE = 100.0
 
 
 def is_divinity2(nif) -> bool:

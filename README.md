@@ -1,7 +1,9 @@
 # divinity2-blender
 
 Divinity II: Ego Draconis and Developer's Cut (Larian Studios, 2009) assets in
-Blender — characters with their skeletons, their clips and their textures.
+Blender — every model the game ships: characters with their skeletons, their
+clips and their textures, and the 3,201 pieces of scenery, items, effects
+and terrain besides.
 
 ## Use it
 
@@ -9,7 +11,11 @@ Install `divinity2-<version>.zip` through **Edit > Preferences > Add-ons >
 Install from Disk**, then set the game's folder in the add-on's preferences.
 
 Then **File > Import > Divinity II asset**, or the *Divinity II* tab in the 3D
-sidebar (press N). Type a name — `goblin`, `damian` — and press OK.
+sidebar (press N). Type a name — `goblin`, `damian`, `chest`, `P_Doors` — and
+press OK.
+
+`docs/using-it.md` is the whole guide: what the six kinds of asset are, what
+arrives, and what to do when something looks wrong.
 
 To get an asset out again, use Blender's own glTF or FBX export. This add-on
 does not write game files.
@@ -18,17 +24,23 @@ does not write game files.
 
 - A character template (`.cat`) arrives as one armature and one object per
   mesh, skinned, textured, in metres.
+- Every other model arrives too — 1,695 scenery, 886 items, 378 effects, 221
+  compiled props, 21 flying fortresses — through the same code path, because
+  an asset is a character with one mesh and no family. See `docs/assets.md`.
 - Textures convert from the game's texture NIFs with no quality lost, and
   cut-out and blended surfaces arrive transparent rather than as opaque cards.
 - Clips arrive as actions with their text keys as pose markers, so a footstep
   keeps its frame.
-- The scale comes out of the file's own `worldScale`, not out of a guess.
+- Everything lands in one world at one scale: a goblin 1.84 m, a Maxos gate
+  5.9 m, a ruined wall 15.7 m. The conversion is the model's own root
+  transform, not the `worldScale` field that looks like one.
 
 ## What does not, yet
 
-- Materials carry a diffuse and a normal map and nothing else: no
-  transparency, no vertex colours, no two-sided flag. Hair and capes therefore
-  arrive opaque.
+- Materials carry a diffuse map, a normal map and transparency. Vertex
+  colours and the two-sided flag are read but not wired up.
+- An effect that is a pure emitter imports as nothing: many hold timing and
+  nodes with no geometry at all.
 - Equipment is not simulated: a clip's `eq=`/`ue=` text keys arrive as pose
   markers but nothing swaps meshes on them.
 - 16 of the game's 121 animation sets stop partway through their transition

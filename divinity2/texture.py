@@ -10,11 +10,14 @@ The pixel data is already exactly what a DDS file carries. Only the 128-byte
 header is missing, so a texture becomes loadable by writing that header in
 front of the bytes. No decoding, no conversion, no quality lost.
 
-A mesh names its texture with a `.tga` extension it never had on disk; the
-file beside it is the same name with `.nif`.
+A mesh names its texture with a `.tga` or `.dds` extension it never had on
+disk; the file beside it is the same name with `.nif`. It does not name it in
+the same case either, and nothing in the game ever noticed, because its
+archives and Windows are both case-insensitive.
 """
 
 import struct
+from functools import lru_cache
 from pathlib import Path
 
 from .nif import read_nif
@@ -34,9 +37,29 @@ _DDPF_FOURCC = 0x4
 _DDSCAPS = 0x1000 | 0x8 | 0x400000  # texture|complex|mipmap
 
 
+@lru_cache(maxsize=8)
+def _by_lower_stem(game_root: Path) -> dict:
+    """Every texture in the install, keyed by its name in lower case.
+
+    A mesh asks for `btb_rocks_c.dds` and the file is `BTB_Rocks_C.nif`; a
+    mesh asks for `p_environment_bv3_tree_a_Nm.tga` and the file is
+    `P_Environment_BV3_Tree_A_NM.nif`. On Windows that is the same name. On
+    Linux it is not, and taking the asset's spelling literally leaves 409 of
+    the game's 3,525 models untextured.
+    """
+    directory = Path(game_root) / TEXTURE_DIR
+    if not directory.is_dir():
+        return {}
+    return {p.stem.lower(): p for p in directory.glob("*.nif")}
+
+
 def texture_path(texture_name: str, game_root: Path) -> Path:
     """`Flying_Froblin_A_DM.tga` -> `<game>/Win32/Textures/..._DM.nif`."""
-    return Path(game_root) / TEXTURE_DIR / (Path(str(texture_name)).stem + ".nif")
+    stem = Path(str(texture_name)).stem
+    direct = Path(game_root) / TEXTURE_DIR / (stem + ".nif")
+    if direct.is_file():
+        return direct
+    return _by_lower_stem(Path(game_root)).get(stem.lower(), direct)
 
 
 def to_dds(path: str | Path) -> bytes:

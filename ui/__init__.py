@@ -8,7 +8,7 @@ import bpy
 from bpy.props import EnumProperty, StringProperty
 from bpy.types import AddonPreferences, Operator, Panel
 
-from ..blender.importer import import_character
+from ..blender.importer import import_asset
 from ..divinity2 import catalog
 
 PACKAGE = __package__.rpartition(".")[0]
@@ -35,7 +35,7 @@ class DV2_AddonPreferences(AddonPreferences):
             layout.label(text="No Win32 folder here", icon="ERROR")
 
 
-def _character_items(self, context):
+def _asset_items(self, context):
     root = _game_root(context)
     if not root:
         return [("", "Set the install path in Preferences", "")]
@@ -45,15 +45,15 @@ def _character_items(self, context):
     return [(str(a.path), a.name, a.kind) for a in found]
 
 
-class DV2_OT_import_character(Operator):
-    """Import a Divinity II character by name"""
+class DV2_OT_import_asset(Operator):
+    """Import a Divinity II model by name: character, scenery, item, effect"""
 
-    bl_idname = "divinity2.import_character"
+    bl_idname = "divinity2.import_asset"
     bl_label = "Divinity II asset"
     bl_options = {"REGISTER", "UNDO"}
 
     search: StringProperty(name="Name", default="")
-    choice: EnumProperty(name="Asset", items=_character_items)
+    choice: EnumProperty(name="Asset", items=_asset_items)
 
     def invoke(self, context, event):
         if not _game_root(context):
@@ -95,7 +95,7 @@ class DV2_OT_import_character(Operator):
         if chosen is None:
             return {"CANCELLED"}
 
-        result = import_character(chosen, _game_root(context))
+        result = import_asset(chosen, _game_root(context))
         self.report(
             {"INFO"},
             f"{len(result.objects)} objects, {result.bones} bones, "
@@ -116,14 +116,14 @@ class DV2_PT_panel(Panel):
         if not _game_root(context):
             layout.label(text="Set the install path in Preferences", icon="ERROR")
             return
-        layout.operator(DV2_OT_import_character.bl_idname, icon="OUTLINER_OB_ARMATURE")
+        layout.operator(DV2_OT_import_asset.bl_idname, icon="OUTLINER_OB_ARMATURE")
 
 
 def _menu(self, context):
-    self.layout.operator(DV2_OT_import_character.bl_idname, text="Divinity II asset")
+    self.layout.operator(DV2_OT_import_asset.bl_idname, text="Divinity II asset")
 
 
-_classes = (DV2_AddonPreferences, DV2_OT_import_character, DV2_PT_panel)
+_classes = (DV2_AddonPreferences, DV2_OT_import_asset, DV2_PT_panel)
 
 
 def register():
