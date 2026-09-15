@@ -101,14 +101,6 @@ class DV2_OT_import_character(Operator):
             f"{len(result.objects)} objects, {result.bones} bones, "
             f"{result.skinned} skinned, {result.clips} clips",
         )
-        if result.inferred:
-            # Not a failure, and not a measurement either: worth one warning
-            # so nobody exports a guess believing it came out of the file.
-            self.report(
-                {"WARNING"},
-                f"{', '.join(result.inferred)} placed in the right hand by "
-                f"inference -- the files do not say where a weapon goes",
-            )
         return {"FINISHED"}
 
 

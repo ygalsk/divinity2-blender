@@ -99,10 +99,20 @@ class Event:
 def events(sequence) -> list[Event]:
     """What the clip says happens, and when.
 
-    Every clip is bracketed by `start` and `end`. In between the game writes
-    what it needs to act on: `morph: L_Foot_Down` and `morph: R_Foot_Down` on
-    a walk, so a footstep sound lands on the frame the foot does, and `v=-5`
-    through `v=0` on a death, ramping a value to nothing as the body falls.
+    Every clip is bracketed by `start` and `end`. The rest is a small grammar,
+    and it is worth knowing which half of it belongs to whom:
+
+    `morph:` is Gamebryo's, not Divinity's. `NiControllerSequence` looks it up
+    in `FindCorrespondingMorphFrame` and `VerifyMatchingMorphKeys`: a
+    `morph: L_Foot_Down` on a walk and the same label on a run mark the frames
+    that must be lined up when one blends into the other. It is a blend
+    alignment point, and only incidentally the frame a foot lands on.
+
+    `eq=` and `ue=` are Divinity's, and they drive equipment:
+    `eq=handR:2H_Sword_Alguard` puts an item in a slot, `ue=weaponSlotBack`
+    takes it out again. The slot resolves to a bone through the engine's own
+    table -- see `divinity2/engine.py`. `s=Footstep_Walk` plays a sound, and a
+    bare `v=-5` ramps a value as a body falls.
 
     They are carried through as pose markers so the timing survives the trip
     into another engine, where it would otherwise have to be re-authored by

@@ -29,9 +29,8 @@ does not write game files.
 - Materials carry a diffuse and a normal map and nothing else: no
   transparency, no vertex colours, no two-sided flag. Hair and capes therefore
   arrive opaque.
-- Which bone carries a weapon is not in the assets at all -- see
-  `docs/attachables.md`. One family names a grip; for the rest the right hand
-  is inferred, and the object says so.
+- Equipment is not simulated: a clip's `eq=`/`ue=` text keys arrive as pose
+  markers but nothing swaps meshes on them.
 - 16 of the game's 121 animation sets stop partway through their transition
   lists, so their blending data is only partly read. Their clips are not
   affected.
@@ -51,5 +50,10 @@ Python reader generated from that description. `nifgen` is vendored under
 What this add-on adds is what `nif.xml` does not say: which file is which
 asset, how a character is bundled, where a texture really lives, and how all
 of that becomes Blender data.
+
+Where the assets do not say — which bone carries a weapon, what a text key
+means — the answer is read out of the executable rather than inferred from the
+files. `docs/engine.md` says how, and `divinity2/engine.py` carries the
+tables with the function they came from.
 
 See `docs/` for the formats and `DECISIONS.md` for what is settled.

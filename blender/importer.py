@@ -25,7 +25,6 @@ class Result:
     shared_rig: bool = False
     skinned: int = 0
     attached: int = 0
-    inferred: list = field(default_factory=list)
     hidden_lods: int = 0
     materials: int = 0
     clips: int = 0
@@ -65,13 +64,14 @@ def import_character(
         [b.name for b in result.armature.data.bones] if result.armature else []
     )
 
+    carried_so_far = 0
     for mesh in character.meshes:
-        carried = attach.is_attachable(mesh.name)
-        bone = (
-            attach.attachment_bone(attach.weapon_name(mesh.name), bone_names)
-            if carried
-            else None
-        )
+        bone = None
+        if attach.is_attachable(mesh.name):
+            bone = attach.attachment_bone(
+                attach.weapon_name(mesh.name), bone_names, carried_so_far
+            )
+            carried_so_far += 1
 
         for node, world, _parent in scene.walk(mesh.root):
             if type(node).__name__ not in SHAPES:
@@ -103,16 +103,9 @@ def import_character(
                 obj, result.armature, bone
             ):
                 result.attached += 1
-                # The asset files do not say which bone carries a weapon --
-                # the game decides that at runtime. Say so on the object
-                # rather than let it pass for measured.
-                obj["dv2_attachment"] = bone
-                obj["dv2_attachment_source"] = (
-                    "named dummy" if bone.startswith(attach.DUMMY_PREFIX)
-                    else "inferred: right hand"
-                )
-                if not bone.startswith(attach.DUMMY_PREFIX):
-                    result.inferred.append(obj.name)
+            else:
+                # No socket for it. It still travels with the character.
+                obj.parent = result.armature
 
     # A family's shared `.kf` repeats what the character already bundles --
     # a Froblin's own 15 clips are exactly Froblin_Base.kf's 15 -- so the
