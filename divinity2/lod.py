@@ -25,6 +25,11 @@ _DISTANCE = re.compile(r"LODDistance\s*=\s*([0-9.]+)")
 #: The level the game shows at close range.
 NEAREST = 0
 
+#: A line on its own in the buffer that means the shape is never drawn.
+#: Seven shapes across the 324 templates carry it -- helper geometry that
+#: would otherwise arrive as a visible lump.
+HIDDEN = "NiHide"
+
 
 def _user_prop(shape) -> str:
     for extra in getattr(shape, "extra_data_list", None) or ():
@@ -44,6 +49,14 @@ def level_of(shape) -> int | None:
 def distance_of(shape) -> float | None:
     match = _DISTANCE.search(_user_prop(shape))
     return float(match.group(1)) if match else None
+
+
+def is_hidden(shape) -> bool:
+    """Does the shape say it is never drawn?"""
+    return any(
+        line.strip().rstrip("#") == HIDDEN
+        for line in _user_prop(shape).splitlines()
+    )
 
 
 def is_nearest(shape) -> bool:

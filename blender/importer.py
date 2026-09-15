@@ -82,8 +82,9 @@ def import_character(
             obj = scene.build_mesh(node, world, factor, rest)
             result.objects.append(obj)
 
-            # Every level of detail is in the file; show only the nearest.
-            if not lod.is_nearest(node):
+            # Every level of detail is in the file; show only the nearest,
+            # and never a shape the buffer marks NiHide.
+            if lod.is_hidden(node) or not lod.is_nearest(node):
                 obj.hide_set(True)
                 obj.hide_render = True
                 result.hidden_lods += 1

@@ -16,9 +16,9 @@ files live in `Win32/Characters/<family>/`:
 `Attachables` is not a family. It is where the weapons live.
 """
 
-import re
 from pathlib import Path
 
+from . import kfm
 from .nif import read_nif
 
 CHARACTERS = Path("Win32") / "Characters"
@@ -65,15 +65,29 @@ def shared_skeleton(character, game_root):
     return next((b for b in nif.blocks if type(b).__name__ == "NiNode"), None)
 
 
+def animation_set(character):
+    """The character's own KFM, parsed. See `divinity2.kfm`."""
+    if not character.animation_set:
+        return None
+    try:
+        return kfm.read_headerless(bytes(character.animation_set))
+    except (kfm.Truncated, ValueError):
+        return None
+
+
 def clip_files(character, game_root) -> list[Path]:
-    """The `.kf` files the character's own KFM names, resolved on disk."""
+    """The `.kf` files the character's own KFM names, resolved on disk.
+
+    The KFM writes the names the way the game sees them -- `.\\Froblin_Base.kf`,
+    relative to the family's folder -- so only the last segment is used.
+    """
     name = family_of(character, game_root)
     if name is None:
         return []
     directory = Path(game_root) / CHARACTERS / name
-    named = {
-        m.decode().replace("\\", "/").split("/")[-1]
-        for m in re.findall(rb"[\x20-\x7e]{4,}", character.animation_set)
-        if m.lower().endswith(b".kf")
-    }
+
+    parsed = animation_set(character)
+    if parsed is None:
+        return []
+    named = {Path(f.replace("\\", "/")).name for f in parsed.kf_files}
     return sorted(directory / n for n in named if (directory / n).is_file())

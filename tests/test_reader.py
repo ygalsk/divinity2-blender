@@ -232,3 +232,46 @@ class TestSkinning(unittest.TestCase):
             100.0,
             "the wrong term should throw the armour off the character",
         )
+
+
+@unittest.skipUnless(GAME.is_dir(), "set DV2_GAME to an install")
+class TestAnimationSet(unittest.TestCase):
+    """The KFM, against NifTools' own description of it."""
+
+    def test_every_animation_set_in_the_game_parses(self):
+        from divinity2 import kfm
+
+        files = sorted((GAME / "Win32/Characters").rglob("*.kfm"))
+        self.assertGreater(len(files), 100)
+
+        complete = 0
+        for path in files:
+            parsed = kfm.read(path.read_bytes())
+            self.assertTrue(parsed.skeleton.endswith(".nif"), path.name)
+            self.assertTrue(parsed.kf_files, path.name)
+            complete += parsed.complete
+        # 105 of 121 read to the last byte; the rest stop in a transition
+        # list, after they have named their files. Both are usable.
+        self.assertGreaterEqual(complete, 100)
+
+    def test_a_character_carries_its_own_animation_set(self):
+        from divinity2 import rig
+
+        character = read_character(
+            GAME / "Win32/Characters/Templates/Black_Goblin.cat"
+        )
+        parsed = rig.animation_set(character)
+        self.assertIsNotNone(parsed, "the .cat's CAMDataEntry should parse")
+        self.assertEqual(parsed.master, "Scene Root")
+        self.assertTrue(parsed.skeleton.endswith("Skeleton.nif"))
+        self.assertEqual(
+            [p.name for p in rig.clip_files(character, GAME)], ["Froblin_Base.kf"]
+        )
+
+    def test_a_kfm_is_recognised_by_its_header(self):
+        """The negative control: a NIF is not a KFM."""
+        from divinity2 import kfm
+
+        nif = GAME / "Win32/Characters/Froblin/Skeleton.nif"
+        with self.assertRaises(ValueError):
+            kfm.read(nif.read_bytes())
