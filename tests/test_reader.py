@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from divinity2 import catalog, rig, texture
+from divinity2 import binxml, catalog, graph, lod, region, rig, terrain, texture
 from divinity2.character import read_asset, read_character, read_model
 from divinity2.nif import UNITS_PER_METRE, is_divinity2, read_nif
 
@@ -345,11 +345,163 @@ class TestAsset(unittest.TestCase):
                 size = _metres(read_model(catalog.search(GAME, name, kind=kind)[0].path))
                 self.assertTrue(low <= max(size) <= high, f"{name} is {size}")
 
+    def test_the_lod_node_shows_the_nearest_child_with_geometry(self):
+        """The nearest child is usually an empty stub. 1,055 of 1,059 are."""
+        from divinity2.nif import read_nif
+
+        static = GAME / "World/Banditcamp/Main/StaticMeshes.nif"
+        if not static.is_file():
+            self.skipTest("no Banditcamp in this install")
+        nif = read_nif(static)
+        nodes = [b for b in nif.blocks if type(b).__name__ == "NiLODNode"]
+        self.assertTrue(nodes, "the region's terrain is held in NiLODNodes")
+        for node in nodes:
+            with self.subTest(str(node.name)):
+                show, hide = lod.lod_children(node)
+                self.assertIsNotNone(show, "every one of them holds a mesh")
+                self.assertTrue(lod._holds_geometry(show))
+                # the negative control: the nearest child is the empty one
+                first = [c for c in node.children if c is not None][0]
+                self.assertIn(first, [show] + hide)
+
+    def test_the_walk_names_things_and_drops_only_what_the_engine_drops(self):
+        """A quarter of the game's shapes are called `Undefined Geometry`."""
+        static = GAME / "World/Banditcamp/Main/StaticMeshes.nif"
+        if not static.is_file():
+            self.skipTest("no Banditcamp in this install")
+        drawn = list(graph.walk(read_model(static).meshes[0].root))
+        self.assertTrue(drawn)
+        anonymous = [d for d in drawn if d.name.strip().lower() in graph.ANONYMOUS]
+        self.assertEqual(anonymous, [], "every shape takes a name from above it")
+        # every yielded shape carries its whole node path and real geometry
+        for d in drawn:
+            self.assertIn("/", d.path)
+            self.assertTrue(d.data.num_vertices)
+        # the negative control: the file holds shapes the walk must not yield
+        culled = [b for b in read_nif(static).blocks
+                  if type(b).__name__ in graph.SHAPES and lod.is_culled(b)]
+        self.assertTrue(culled, "Banditcamp marks 10 shapes APP_CULLED")
+        yielded = {id(d.shape) for d in drawn}
+        self.assertTrue(all(id(c) not in yielded for c in culled))
+
+    def test_the_terrain_finds_its_picture_by_index(self):
+        """It carries no texturing property, so the model cannot say."""
+        static = GAME / "World/Banditcamp/Main/StaticMeshes.nif"
+        if not static.is_file():
+            self.skipTest("no Banditcamp in this install")
+        patches = [d for d in graph.walk(read_model(static).meshes[0].root)
+                   if terrain.patch_of(d.path) is not None]
+        self.assertTrue(patches, "the region's ground is in StaticMeshes.nif")
+        for d in patches:
+            with self.subTest(d.path):
+                self.assertNotIn("NiTexturingProperty", d.properties)
+                index = terrain.patch_of(d.path)
+                self.assertIsNotNone(terrain.megatexture(static, index))
+                self.assertTrue(d.data.uv_sets, "and it is already unwrapped")
+        # the negative control: an ordinary shape is not terrain
+        other = next(d for d in graph.walk(read_model(static).meshes[0].root)
+                     if terrain.patch_of(d.path) is None)
+        self.assertIsNone(terrain.megatexture(static, terrain.patch_of(other.path)))
+
     def test_a_texture_nif_is_not_a_model(self):
         """The negative control: the texture folder holds no geometry."""
         any_texture = next((GAME / catalog.TEXTURES).glob("*.nif"))
         with self.assertRaises(ValueError):
             read_asset(any_texture)
+
+
+@unittest.skipUnless(GAME.is_dir(), "set DV2_GAME to an install")
+class TestRegion(unittest.TestCase):
+    """One region, read the way the engine reads it."""
+
+    def test_children_come_out_in_the_engines_order(self):
+        """`children[0]` is the position and `children[1]` the basis.
+
+        The stream stores them the other way round, and `binxml` undoes that
+        for everything. The proof is that the basis then has determinant +1:
+        a placement is a rotation, and a reflection would turn every prop in
+        the region inside out.
+        """
+        import numpy as np
+
+        doc = binxml.read((GAME / "World/Banditcamp/Main/scenery.xml").read_bytes())
+        found = list(doc.find_all("Scenery"))
+        self.assertEqual(len(found), 775)
+        for node in found:
+            self.assertTrue(node.children[0].is_a("NiPoint3"))
+            self.assertTrue(node.children[1].is_a("NiMatrix3"))
+            rows = [[float(r.get(k)) for k in "xyz"] for r in node.children[1].children]
+            self.assertGreater(np.linalg.det(np.array(rows)), 0.9)
+
+    def test_a_region_holds_six_kinds_of_thing(self):
+        found = region.read(GAME, "Banditcamp", "Main")
+        counts = {k: len(found.of(k)) for k in
+                  ("scenery", "character", "item", "trigger", "light", "tree")}
+        self.assertEqual(counts, {"scenery": 775, "character": 47, "item": 169,
+                                  "trigger": 82, "light": 96, "tree": 59})
+        self.assertEqual(found.missing, {"scenery": 0, "character": 0, "item": 0})
+        self.assertTrue(found.statics.is_file())
+        self.assertTrue(found.vegetation.is_file())
+
+    def test_a_character_finds_its_template(self):
+        """Visual UUID -> `TemplateName` -> `Characters/Templates/<name>.cat`."""
+        found = region.read(GAME, "Banditcamp", "Main")
+        skeleton = next(p for p in found.of("character")
+                        if p.fields.get("VisualPrototypeUUID") == "Skeleton_DW")
+        self.assertEqual(skeleton.model.name, "Skeleton_DW.cat")
+
+    def test_an_item_finds_its_model_through_two_tables(self):
+        """Item UUID -> `VisualUUID` -> `Folder`/`NifFileName`.item."""
+        found = region.read(GAME, "Banditcamp", "Main")
+        barrel = next(p for p in found.of("item")
+                      if p.fields.get("PrototypeUUID", "").startswith("IT_Containers_Barrels"))
+        self.assertTrue(barrel.model.is_file())
+        self.assertEqual(barrel.model.suffix, ".item")
+
+    def test_an_area_trigger_is_a_prism(self):
+        found = region.read(GAME, "Banditcamp", "Main")
+        areas = [p for p in found.of("trigger") if p.polygon]
+        self.assertTrue(areas)
+        for area in areas:
+            bottom, top = area.height
+            self.assertGreater(top, bottom)
+            # every corner sits on the bottom plane; the top is the extrusion
+            for corner in area.polygon:
+                self.assertAlmostEqual(corner[2], bottom, places=3)
+
+    def test_the_sun_shines_downwards(self):
+        """`MakeZRotation(z) * MakeYRotation(y)`, and the light goes along -X.
+
+        The negative control is in the numbers: of the six axes the basis
+        could use, only -X is below the horizon in every region that ships a
+        `Day` set.
+        """
+        import numpy as np
+
+        below = {}
+        for name in region.regions(GAME):
+            found = region.read(GAME, name, "Main")
+            for sun in (p for p in found.of("light") if p.fields["shape"] == "sun"):
+                basis = region.sun_basis(sun.fields["angle_y"], sun.fields["angle_z"])
+                for label, axis in (("+X", basis[:, 0]), ("-X", -basis[:, 0]),
+                                    ("+Y", basis[:, 1]), ("-Y", -basis[:, 1]),
+                                    ("+Z", basis[:, 2]), ("-Z", -basis[:, 2])):
+                    below[label] = below.get(label, 0) + (axis[2] < 0)
+                below["total"] = below.get("total", 0) + 1
+        self.assertGreater(below["total"], 0)
+        self.assertEqual(below["-X"], below["total"])
+        self.assertLess(below["+X"], below["total"])
+
+    def test_a_tree_is_the_size_the_engine_gives_it(self):
+        """`rescaled.y * size`, `rescaled.y = (1 - v) + instance.y * v * 2`."""
+        found = region.read(GAME, "Banditcamp", "Main")
+        trees = found.of("tree")
+        self.assertTrue(trees)
+        for tree in trees:
+            self.assertGreater(tree.scale, 0.0)
+            self.assertLess(tree.scale, 200.0)
+        self.assertTrue(any(t.fields["spt"].endswith(".spt") for t in trees))
+
 
 
 def _metres(character):

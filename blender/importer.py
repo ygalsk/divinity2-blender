@@ -10,15 +10,13 @@ from pathlib import Path
 
 import bpy
 
-from ..divinity2 import attach, lod, rig
+from ..divinity2 import attach, graph, rig
 from ..divinity2.character import read_clips, read_model
 from ..divinity2.nif import UNITS_PER_METRE
 
 from . import animation as dv2_animation
 from . import material as dv2_material
 from . import scene
-
-SHAPES = ("NiTriShape", "NiTriStrips")
 
 
 @dataclass
@@ -77,43 +75,17 @@ def import_asset(
             carried_so_far += 1
 
         factor = _factor(mesh.root, scale)
-        # A culled node takes its whole subtree with it, the way the engine's
-        # `NiAVObject::Cull` does. `walk` is depth-first, so a parent is always
-        # seen before its children.
-        culled = set()
-        # The node names above a shape are the only thing that tells some
-        # geometry apart: a region's built mesh carries its own low-detail
-        # terrain and the author's shadow helper under named nodes, with no
-        # flag on either, and the engine filters them by that name. The shape
-        # itself is usually called `Editable Poly`.
-        trail = {}
-        for node, world, parent in scene.walk(mesh.root):
-            if lod.is_culled(node) or id(parent) in culled:
-                culled.add(id(node))
-            above = trail.get(id(parent), "")
-            trail[id(node)] = f"{above}/{node.name}" if above else str(node.name)
-            if type(node).__name__ not in SHAPES:
-                continue
-            if node.data is None or not node.data.num_vertices:
-                continue
-
-            obj = scene.build_mesh(node, world, factor, rest)
-            obj["dv2_path"] = trail.get(id(node), str(node.name))
+        for drawn in graph.walk(mesh.root):
+            obj = scene.build_mesh(drawn, factor, rest)
+            obj["dv2_path"] = drawn.path
             result.objects.append(obj)
 
-            # Every level of detail is in the file; show only the nearest,
-            # never a shape the engine culls, and never one the buffer marks
-            # NiHide.
-            if (
-                id(node) in culled
-                or lod.is_hidden(node)
-                or not lod.is_nearest(node)
-            ):
+            if drawn.hidden:
                 obj.hide_set(True)
                 obj.hide_render = True
                 result.hidden_lods += 1
 
-            built = dv2_material.build_material(node, game_root, cache)
+            built = dv2_material.build_material(drawn, game_root, cache, path)
             if built is not None:
                 obj.data.materials.append(built)
                 result.materials += 1
@@ -121,7 +93,7 @@ def import_asset(
             if result.armature is None:
                 continue
 
-            if scene.bind_skin(obj, node, result.armature):
+            if scene.bind_skin(obj, drawn.shape, result.armature):
                 result.skinned += 1
             elif bone is not None and scene.attach_to_bone(
                 obj, result.armature, bone
@@ -167,7 +139,7 @@ def _factor(root, scale=None) -> float:
     Every model in the game is authored in centimetres. How many of those
     units reach the world is stated on the tree's root node: a character
     leaves `Scene Root` at 1.0, and every scenery, item, effect and fortress
-    bakes the conversion into it as 0.01. `scene.walk` already applies that
+    bakes the conversion into it as 0.01. `graph.walk` already applies that
     scale, so the factor must not apply it a second time -- hence the product.
 
     `scale` overrides the unit, not the root: it is there for a file that

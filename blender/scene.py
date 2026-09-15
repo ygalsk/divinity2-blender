@@ -14,6 +14,7 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
+from ..divinity2 import graph
 from ..divinity2 import skin as dv2_skin
 
 #: Game units per metre. The game's own unit is roughly a centimetre; this is
@@ -24,29 +25,11 @@ UNITS_PER_METRE = 100.0
 
 def matrix_of(block) -> Matrix:
     """The local transform of any NiAVObject, as Blender wants it."""
-    r = block.rotation
-    basis = Matrix((
-        (r.m_11, r.m_12, r.m_13),
-        (r.m_21, r.m_22, r.m_23),
-        (r.m_31, r.m_32, r.m_33),
-    )).transposed()
-    m = basis.to_4x4() @ Matrix.Scale(block.scale, 4)
-    m.translation = Vector((block.translation.x, block.translation.y, block.translation.z))
-    return m
-
-
-def walk(node, parent_matrix=Matrix.Identity(4), parent=None):
-    """Yield (node, world matrix, parent node) over a NIF node tree."""
-    world = parent_matrix @ matrix_of(node)
-    yield node, world, parent
-    for child in getattr(node, "children", ()) or ():
-        if child is None:
-            continue
-        yield from walk(child, world, node)
+    return Matrix(graph.matrix_of(block).tolist())
 
 
 def _is_shape(block) -> bool:
-    return type(block).__name__ in ("NiTriShape", "NiTriStrips")
+    return type(block).__name__ in graph.SHAPES
 
 
 def rest_matrices(skeleton_root) -> dict:
@@ -61,12 +44,15 @@ def rest_matrices(skeleton_root) -> dict:
     of the same equation on different scales.
     """
     out = {}
-    for node, world, _parent in walk(skeleton_root):
-        if _is_shape(node):
-            continue
+    stack = [(skeleton_root, np.eye(4))]
+    while stack:
+        node, parent = stack.pop()
+        world = parent @ graph.matrix_of(node)
         name = str(node.name)
-        if name:
-            out.setdefault(name, np.array(world))
+        if name and not _is_shape(node):
+            out.setdefault(name, world)
+        stack += [(c, world) for c in reversed(
+            [c for c in (getattr(node, "children", ()) or []) if c is not None])]
     return out
 
 
@@ -88,7 +74,12 @@ def build_armature(skeleton_root, name: str, scale: float, rest: dict | None = N
 
     _edit(obj, True)
     edit_bones = {}
-    for node, world, parent in walk(skeleton_root):
+    stack = [(skeleton_root, np.eye(4), None)]
+    while stack:
+        node, parent_world, parent = stack.pop()
+        world = Matrix((parent_world @ graph.matrix_of(node)).tolist())
+        stack += [(c, parent_world @ graph.matrix_of(node), node) for c in reversed(
+            [c for c in (getattr(node, "children", ()) or []) if c is not None])]
         if _is_shape(node):
             continue
         bone_name = str(node.name)
@@ -148,16 +139,18 @@ def _scaled(world: Matrix, scale: float) -> Matrix:
 # the meshes
 
 
-def build_mesh(shape, world: Matrix, scale: float, rest: dict | None = None):
-    """One NiTriShape as one Blender object, with its own transform.
+def build_mesh(drawn, scale: float, rest: dict | None = None):
+    """One drawable shape as one Blender object, with its own transform.
 
     A skinned shape is not placed by its node transform. Its geometry lives in
     skin space and is carried entirely by the bones, so it is moved into the
     armature's rest pose here and the object then sits at the origin. Placing
     it by its node transform as well applies the offset twice.
     """
-    data = shape.data
-    name = str(shape.name) or "shape"
+    shape = drawn.shape
+    data = drawn.data
+    world = Matrix(drawn.world.tolist())
+    name = drawn.name
 
     raw = np.array([(v.x, v.y, v.z) for v in data.vertices], dtype=np.float64)
     moved = dv2_skin.to_rest_pose(raw, shape, rest) if rest else None

@@ -4,6 +4,11 @@ A character ships every level of detail in the same file -- `Froblin_HI`,
 `Froblin_MED`, `Froblin_LOW` -- and importing all three stacks three bodies in
 the same place.
 
+The game states a level of detail in two unrelated ways, and both have to be
+read. A character uses a string in each shape's `UserPropBuffer`. Everything
+built into a region uses `NiLODNode`, the standard Gamebryo container, whose
+`NiRangeLODData` gives one camera-distance range per child.
+
 Which is which is written down, so it need not be guessed from the name. Every
 shape carries a `UserPropBuffer` string, and in it:
 
@@ -64,6 +69,44 @@ def is_hidden(shape) -> bool:
         line.strip().rstrip("#") == HIDDEN
         for line in _user_prop(shape).splitlines()
     )
+
+
+#: The `NiLODNode` child to show is the nearest one that has geometry.
+#:
+#: The nearest child is usually empty. A region's built mesh holds its terrain
+#: in `NiLODNode`s whose fine children are stub nodes, waiting for a streamed
+#: file that the region may not ship: `Banditcamp` has `BC_terrain_A_low`
+#: with the mesh in it and `_medium` and `_high` empty. Taking the nearest
+#: child and stopping loses the ground of every region -- 1,055 of the 1,059
+#: `NiLODNode`s in the game have an empty nearest child, and 1,044 of them
+#: hold geometry in a coarser one.
+def lod_children(node):
+    """(the child to show, the children to hide) for one `NiLODNode`."""
+    children = [c for c in (getattr(node, "children", ()) or []) if c is not None]
+    if not children:
+        return None, []
+    data = getattr(node, "lod_level_data", None)
+    ranges = getattr(data, "lod_levels", None) or []
+    order = sorted(
+        range(len(children)),
+        key=lambda i: float(ranges[i].near_extent) if i < len(ranges) else 1e9,
+    )
+    for i in order:
+        if _holds_geometry(children[i]):
+            return children[i], [c for j, c in enumerate(children) if j != i]
+    return None, children
+
+
+def _holds_geometry(node) -> bool:
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        data = getattr(n, "data", None)
+        if type(n).__name__ in ("NiTriShape", "NiTriStrips"):
+            if data is not None and data.num_vertices:
+                return True
+        stack += [c for c in (getattr(n, "children", ()) or []) if c is not None]
+    return False
 
 
 def is_culled(node) -> bool:

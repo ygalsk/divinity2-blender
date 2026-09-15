@@ -14,6 +14,7 @@ from pathlib import Path
 import bpy
 
 from ..divinity2 import material as dv2_property
+from ..divinity2 import terrain as dv2_terrain
 from ..divinity2 import texture as dv2_texture
 
 #: Which NiTexturingProperty slot means what.
@@ -69,15 +70,20 @@ def _transparency(material, principled, image_node, alpha) -> None:
         material.use_transparent_shadow = False
 
 
-def build_material(shape, game_root: Path, cache: Path):
-    """One material per shape, from its property blocks."""
-    found = dv2_property.properties(shape)
+def build_material(drawn, game_root: Path, cache: Path, source=None):
+    """One material per drawable, from the property state the walk resolved.
+
+    The state comes from the walk, not from the shape: Gamebryo attaches
+    render state to a node and a shape inherits it from the nearest ancestor
+    that carries one (`NiAVObject::PushLocalProperties`).
+    """
+    found = drawn.properties
     texturing = found.get("NiTexturingProperty")
     material_property = found.get("NiMaterialProperty")
     alpha_property = found.get("NiAlphaProperty")
     specular = found.get("NiSpecularProperty")
 
-    name = str(shape.name) or "material"
+    name = drawn.name or "material"
     material = bpy.data.materials.new(name)
     material.use_nodes = True
     principled = material.node_tree.nodes["Principled BSDF"]
@@ -125,9 +131,112 @@ def build_material(shape, game_root: Path, cache: Path):
                     mapping.outputs["Normal"], principled.inputs["Normal"]
                 )
 
+    if diffuse_node is None and source is not None:
+        index = dv2_terrain.patch_of(drawn.path)
+        if index is not None:
+            _terrain(material, principled, source, index, cache)
+
     if alpha_property is not None:
         decoded = dv2_property.alpha(alpha_property)
         if decoded.transparent:
             _transparency(material, principled, diffuse_node, decoded)
 
     return material
+
+
+def _image_of(path: Path, cache: Path):
+    """A texture that lives beside the region rather than in `Textures/`.
+
+    It is named `.dds` and it is a NIF, the same way a mesh names its texture
+    `.tga` and the file is a NIF. The bytes inside are a DDS surface with the
+    128-byte header missing, so the same conversion applies.
+    """
+    cache = Path(cache)
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / f"{Path(path).stem}.dds"
+    try:
+        if not out.exists():
+            out.write_bytes(dv2_texture.to_dds(path))
+        image = bpy.data.images.load(str(out), check_existing=True)
+    except (ValueError, RuntimeError, OSError):
+        return None
+    image.name = Path(path).stem
+    return image
+
+
+def _terrain(material, principled, source, index: int, cache: Path) -> None:
+    """The ground: a baked picture with the splat layers mixed over it.
+
+    A terrain shape resolves no texturing property, so nothing in the model
+    says what to draw. `Terrain.xml` does: one `MegaTexture` per patch, baked
+    flat, and a list of layers each with its own tiling and one channel of one
+    alpha map as its weight. The game fades between the two at
+    `splatdistance`; Blender has no such distance, so the baked picture is the
+    base and every layer is mixed over it by its mask -- where a mask is zero
+    the baked ground shows through, which is what the game draws far away.
+    """
+    patch = dv2_terrain.patches(source).get(index)
+    if patch is None:
+        return
+    tree = material.node_tree
+    coords = tree.nodes.new("ShaderNodeTexCoord")
+    principled.inputs["Roughness"].default_value = 0.9
+
+    colour = None
+    if patch.megatexture is not None:
+        baked = _image_of(patch.megatexture, cache)
+        if baked is not None:
+            node = tree.nodes.new("ShaderNodeTexImage")
+            node.image = baked
+            tree.links.new(coords.outputs["UV"], node.inputs["Vector"])
+            colour = node.outputs["Color"]
+
+    for layer in patch.layers:
+        image = cached_image(layer.texture, _game_of(cache, source), cache)
+        mask = _image_of(layer.mask, cache) if layer.mask else None
+        if image is None or mask is None:
+            continue
+
+        tiled = tree.nodes.new("ShaderNodeMapping")
+        tiled.inputs["Scale"].default_value = (layer.tiling, layer.tiling, 1.0)
+        tree.links.new(coords.outputs["UV"], tiled.inputs["Vector"])
+        node = tree.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        node.extension = "REPEAT"
+        tree.links.new(tiled.outputs["Vector"], node.inputs["Vector"])
+
+        weight = tree.nodes.new("ShaderNodeTexImage")
+        weight.image = mask
+        weight.image.colorspace_settings.name = "Non-Color"
+        tree.links.new(coords.outputs["UV"], weight.inputs["Vector"])
+        split = tree.nodes.new("ShaderNodeSeparateColor")
+        tree.links.new(weight.outputs["Color"], split.inputs["Color"])
+        channel = (
+            weight.outputs["Alpha"] if layer.channel == 3
+            else split.outputs[layer.channel]
+        )
+
+        if colour is None:
+            colour = node.outputs["Color"]
+            continue
+        mix = tree.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        tree.links.new(channel, mix.inputs["Factor"])
+        tree.links.new(colour, mix.inputs[6])       # A
+        tree.links.new(node.outputs["Color"], mix.inputs[7])   # B
+        colour = mix.outputs[2]
+
+    if colour is not None:
+        tree.links.new(colour, principled.inputs["Base Color"])
+
+
+def _game_of(cache: Path, source) -> Path:
+    """Where the install is, from the model being read.
+
+    A layer texture lives in `Win32/Textures` like every other, and the model
+    is somewhere under `World/`, so the install root is above both.
+    """
+    for parent in Path(source).parents:
+        if (parent / "Win32" / "Textures").is_dir():
+            return parent
+    return Path(cache).parent

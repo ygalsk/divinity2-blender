@@ -75,12 +75,3 @@ def alpha(block) -> Alpha:
         threshold=int(block.threshold),
     )
 
-
-def properties(shape) -> dict:
-    """A shape's property blocks, keyed by block name without the `Ni` prefix."""
-    out = {}
-    for block in shape.properties or ():
-        if block is None:
-            continue
-        out.setdefault(type(block).__name__, block)
-    return out

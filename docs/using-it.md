@@ -1,8 +1,9 @@
 # Using it
 
 Everything this add-on does is reachable from two places: the **Divinity II**
-tab in the 3D sidebar, and **File > Import > Divinity II asset**. There is no
-command line, no extraction step and no settings beyond the game's folder.
+tab in the 3D sidebar, and **File > Import**. There is no command line, no
+extraction step and no settings beyond the game's folder. Two buttons: one
+model, or one whole region.
 
 ## Install it once
 
@@ -41,6 +42,30 @@ There are 3,525 models in the install, of six kinds:
 Names follow the game's own prefixes, which is the fastest way to browse:
 `P_` scenery props, `IT_` items, `EFF_` effects. Type just `P_Doors` or
 `IT_Containers` to see a whole set.
+
+## Import a whole region
+
+The second button builds a level: the ground, every prop, every person, the
+lights and the triggers, in one go.
+
+- **Region** lists the 19 the game ships; **Sub-region** its interiors.
+- **Time of day** picks which `Lights` folder to read — the sun and the lamps
+  are authored three times.
+- The tick boxes choose what to build. Triggers and the vegetation library are
+  off by default: triggers are wireframe volumes that get in the way, and the
+  vegetation library arrives unplaced (`docs/regions.md`, section 9).
+
+Each kind lands in its own collection — `Banditcamp scenery`,
+`Banditcamp light`, and so on — so you can switch off what you are not working
+on. A hidden `Banditcamp models` collection holds one copy of each mesh; every
+placement in the scene is a linked copy of it, so 775 props cost 105 meshes.
+
+Everything the game's files said is kept on the object as a custom property:
+`dv2_uuid`, `dv2_kind`, `dv2_prototype`, `dv2_path`, and for a tree its
+`dv2_model` and `dv2_spt`. Nothing is dropped on the way in.
+
+Banditcamp, whole: 157 models imported, 732 scenery, 169 items, 47 characters,
+96 lights, 82 triggers, 59 trees, 69 pieces of built geometry, 0 failures.
 
 ## What arrives
 
