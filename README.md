@@ -7,8 +7,8 @@ A Blender add-on that imports the models and whole regions of
   textures and animations, 1,695 scenery pieces, 886 items, 378 effects,
   295 props and 21 flying fortresses.
 - **Whole regions**: the ground, the scenery, items, characters, lights, trees,
-  triggers, and the grass the game scatters at load time. 19 regions,
-  122 sub-regions.
+  triggers, and the grass the game scatters at load time. The import menu
+  lists all 21 regions the game declares, with 124 sub-regions.
 - **In metres, textured**: diffuse and normal maps, transparency, vertex
   colours, and animation clips as actions with their events as markers.
 
