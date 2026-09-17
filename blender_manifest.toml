@@ -13,17 +13,23 @@ tags = ["Import-Export"]
 
 blender_version_min = "5.2.0"
 
+wheels = [
+  "./wheels/nifgen-2026.9.15-py3-none-any.whl",
+]
+
 license = ["SPDX:GPL-3.0-or-later"]
 
 # The NIF reader is generated from the NifTools project's format
-# specification and vendored under vendor/nifgen.
+# specification and bundled as a wheel; the archive and binary-XML reader is
+# divinity2-lib, vendored under vendor/dv2lib.
 copyright = [
   "2026 divinity2-blender contributors",
   "2005 NIF File Format Library and Tools contributors",
+  "2026 ygalsk (divinity2-lib)",
 ]
 
 [permissions]
-files = "Read the unpacked game from disk"
+files = "Unpack the game into a folder you choose and read it"
 
 [build]
 paths_exclude_pattern = [

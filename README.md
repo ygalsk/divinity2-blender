@@ -7,15 +7,14 @@ terrain besides — and whole regions, with everything standing in them.
 
 ## Use it
 
-You need your own copy of the game, Blender 5.2 or newer, and
-[dv2mod](https://github.com/ygalsk/dv2-mod), which unpacks the game's archives
-and names its documents once:
+You need your own copy of Divinity II: Developer's Cut and Blender 5.2 or
+newer. Nothing else.
 
-    python -m dv2mod.core.bundle game <folder>
-
-Install `divinity2-<version>.zip` through *Edit > Preferences > Get Extensions
-> Install from Disk*, then set **Game folder** in the add-on's preferences to
-`<folder>`.
+1. Install `divinity2-<version>.zip` through *Edit > Preferences > Get
+   Extensions > Install from Disk*.
+2. In the add-on's preferences, set **Game folder** to an empty folder with
+   7 GB free, and press **Unpack the game**. A Steam copy is found by itself;
+   otherwise set **Divinity II install** first. It takes about a minute.
 
 Then **File > Import > Divinity II asset**, or the *Divinity II* tab in the 3D
 sidebar (press N). Type a name — `goblin`, `damian`, `chest`, `P_Doors` — and
@@ -95,12 +94,15 @@ the clip only cycles the legs.
 
 ## How it reads the files
 
-It does not. The archives and the game's binary XML are dv2mod's: it unpacks
-the one and names the other, and the add-on reads what it wrote. The NIF format
-is described by the NifTools project in `nif.xml`,
-which covers Divinity II as a version of its own, and read by `nifgen`, the
-Python reader generated from that description. `nifgen` is vendored under
-`vendor/` unchanged, under its BSD-3-Clause licence.
+The archives and the game's binary XML are read by
+[divinity2-lib](https://github.com/ygalsk/divinity2-lib), the reader part of
+the modding tool [dv2mod](https://github.com/ygalsk/dv2-mod), vendored under
+`vendor/dv2lib` unchanged. It unpacks the game once, with every document
+named, and the add-on reads what it wrote. The NIF format is described by the
+NifTools project in `nif.xml`, which covers Divinity II as a version of its
+own, and read by `nifgen`, the Python reader generated from that description.
+`nifgen` is bundled unchanged as a wheel under `wheels/`, under its
+BSD-3-Clause licence.
 
 What this add-on adds is what `nif.xml` does not say: which file is which
 asset, how a character is bundled, where a texture really lives, and how all

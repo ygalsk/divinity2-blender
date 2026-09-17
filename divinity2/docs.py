@@ -1,17 +1,16 @@
-"""The game's documents, as dv2mod hands them over.
+"""The game's documents, as the unpack hands them over.
 
 Most of this game's `.xml` files are not text: they are a tree with every name
-replaced by a 32-bit hash, packed into a NIF container. dv2mod reads them and
-names them -- the one place a name is ever recovered -- and writes each one as
-plain JSON under `docs/<archive path>.json`:
-
-    python -m dv2mod.core.bundle game <folder>     # the game's files, and every document
-    python -m dv2mod.core.bundle all <folder>      # every document alone
+replaced by a 32-bit hash, packed into a NIF container. `vendor/dv2lib` reads
+them and names them -- the one place a name is ever recovered, taken from
+dv2mod -- and writes each one as plain JSON under `docs/<archive path>.json`
+when the game is unpacked (the preferences' button, or
+`python -m dv2lib unpack <folder>`).
 
 This reads that JSON back. A tree is `{"name", "attrs", "text"?, "children"?}`,
 an unrecovered name arrives as `#hhhhhhhh`, and **the children are already in
 the engine's order** -- `xml::dom::CStreamableNode::LoadBinary` fills the last
-child slot first, and dv2mod undoes that once, for everything.
+child slot first, and the unpack undoes that once, for everything.
 
 A document is found by the path the add-on would have opened, in the folders
 `use` was given or `DV2_DOCS` lists. The add-on needs no name table and no
@@ -106,7 +105,7 @@ def glob(game_root, pattern: str) -> list:
     path it has under `game_root`. `*` crosses folders, as `fnmatch` has it.
 
     A region bundle holds only its own documents, so asking it lists what dv2mod
-    said belongs to the region; the whole store lists what the game ships.
+    said belongs to the region; an unpacked game lists what the game ships.
     """
     want = pattern.lower()
     found = {}
@@ -137,7 +136,7 @@ class Node:
         return self.name == name
 
     def get(self, name: str, default=None):
-        """An attribute by name -- or by its hash, when dv2mod has no name for it."""
+        """An attribute by name -- or by its hash, when no name was recovered for it."""
         if name in self.attributes:
             return self.attributes[name]
         return self.attributes.get(f"#{hash_of(name):08x}", default)
@@ -192,9 +191,8 @@ def read(path):
     found = find(path)
     if found is None:
         if path.is_file():
-            UNREAD[path] = ("no document folder holds it; run "
-                            "`python -m dv2mod.core.bundle game <folder>` and set the "
-                            "add-on's game folder to it")
+            UNREAD[path] = ("no document folder holds it; unpack the game again "
+                            "from the add-on's preferences")
         return None
     try:
         made = node(json.loads(found.read_text(encoding="utf-8")))

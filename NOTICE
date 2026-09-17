@@ -14,17 +14,25 @@ or affiliated with Larian Studios. You need your own copy of the game.
 Third-party code
 ----------------
 
-vendor/nifgen
+wheels/nifgen-2026.9.15-py3-none-any.whl
     A Python reader for the NetImmerse/Gamebryo file formats, generated from
-    the NifTools project's `nif.xml` format specification. Vendored unchanged.
+    the NifTools project's `nif.xml` format specification. Bundled unchanged,
+    as a wheel built from the generated sources.
 
     Copyright (C) 2005, NIF File Format Library and Tools contributors.
     All rights reserved.
     Licensed under the BSD 3-Clause License; the full text is in
-    vendor/nifgen/LICENSE.rst.
+    nifgen/LICENSE.rst inside the wheel.
 
     https://github.com/niftools/nifgen
     https://github.com/niftools/nifxml
 
-The BSD 3-Clause License is compatible with the GNU General Public License
+vendor/dv2lib
+    divinity2-lib, the Divinity II archive, binary XML and name table readers.
+    Copyright (c) 2026 ygalsk. Licensed under the MIT License; the full text
+    is in vendor/dv2lib/LICENSE. Vendored unchanged.
+
+    https://github.com/ygalsk/divinity2-lib
+
+The BSD 3-Clause and MIT Licenses are compatible with the GNU General Public License
 version 3, so the combined work is distributed under the GPL.

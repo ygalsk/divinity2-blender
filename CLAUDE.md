@@ -20,7 +20,7 @@ Find it, copy it, and write down where it came from.
 | question | source |
 |---|---|
 | what does the engine do | `~/dv2-measure/pdb/gup-decomp.tsv` — 134,240 decompiled functions with real names from `Divinity2GUP.pdb` |
-| what is this field called | dv2mod's name table, never a table here |
+| what is this field called | dv2mod's name table (copied into `divinity2-lib`), never a table here |
 | what does the file format say | the NifTools descriptions in `vendor/`, `nif.xml`, `kfm.xml` |
 | what does Blender do | `bpy` API docs, the bundled manual under the Blender MCP's `data/` |
 
@@ -43,7 +43,8 @@ does not ship.
 | the tool that owns both | `~/dv2` (dv2mod) — its own CLAUDE.md applies there |
 | the readers, no `bpy` anywhere | `divinity2/` |
 | what touches Blender | `blender/`, `ui/` |
-| the NIF reader, generated, unmodified | `vendor/nifgen` |
+| the NIF reader, generated, unmodified | `wheels/nifgen-*.whl` |
+| the archive and binary-XML reader, a copy, unmodified | `vendor/dv2lib`, from `~/divinity2-lib` |
 | how each thing is read, and why | `docs/` — start at `docs/using-it.md` |
 | settled decisions | `DECISIONS.md` |
 
@@ -51,11 +52,14 @@ does not ship.
 
 | layer | owns | must not own |
 |---|---|---|
-| dv2mod (`~/dv2`) | archives, binary XML, the hash→name table, what is placed where, prototypes | geometry, images, animation |
+| dv2mod (`~/dv2`) | the research: where a name is first recovered, what is placed where, prototypes | anything the add-on imports |
+| divinity2-lib (`~/divinity2-lib`) | archives, the search order, binary XML, the hash→name table, the unpack | geometry, images, animation |
 | this add-on | NIF→mesh, DDS→image, KF→action, regions, the grass scatter | a name table, a binary-XML parser, anything only the Unity port needs |
 
-A name that is missing is recovered in dv2mod (`binxml_names.py`) and reaches
-the add-on by re-running `python -m dv2mod.core.bundle all`, never by a table here.
+A name that is missing is recovered in dv2mod (`binxml_names.py`), copied into
+`divinity2-lib`'s `names.py`, and reaches the add-on as a new copy of
+`vendor/dv2lib` and an unpack, never by a table here. `vendor/dv2lib` is never
+edited here: change `~/divinity2-lib` and copy it over.
 
 ## Safety rules
 

@@ -1,9 +1,12 @@
-"""The whole interface: two import operators and one panel.
+"""The whole interface: unpacking the game once, two import operators and one panel.
 
 Choose a name, press OK, the asset arrives. No file browser, no preferences
-beyond the game's folder, no command line.
+beyond the game's two folders, no command line.
 """
 
+import shutil
+import sys
+import threading
 from pathlib import Path
 
 import bpy
@@ -13,6 +16,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 from ..blender.importer import import_asset
 from ..blender.region import ALL, KINDS, import_region
 from ..divinity2 import catalog, docs, region
+from ..vendor.dv2lib import locate, unpack
 
 PACKAGE = __package__.rpartition(".")[0]
 
@@ -21,7 +25,7 @@ def _game_root(context) -> str:
     prefs = context.preferences.addons[PACKAGE].preferences
     # Every entry point asks for the game first, so the documents are
     # registered here once rather than in each operator.
-    docs.use(_documents(prefs))
+    docs.use(prefs.game_root)
     return prefs.game_root
 
 
@@ -31,45 +35,133 @@ def _cache() -> str:
     return bpy.utils.extension_path_user(PACKAGE, path="texture-cache", create=True)
 
 
-def _documents(prefs) -> str:
-    """Where the named documents are: their own folder when one is set, else the game's,
-    where `python -m dv2mod.core.bundle game` writes them."""
-    return prefs.documents or prefs.game_root
+#: About what an unpack writes: 34,857 files, 6.9 GB, measured on the Steam Developer's Cut.
+UNPACKED_BYTES = 7_400_000_000
+
+#: The unpack running, or what the last one said; the preferences show it.
+_unpacking = {"thread": None, "done": 0, "total": 0, "stop": False, "said": ""}
+
+
+class _Stopped(Exception):
+    pass
+
+
+def _forget_reads() -> None:
+    """Every cached read of the game folder, gone: an unpack has just rewritten it."""
+    for name, module in list(sys.modules.items()):
+        if name.startswith(PACKAGE + ".divinity2."):
+            for value in list(vars(module).values()):
+                if callable(getattr(value, "cache_clear", None)):
+                    value.cache_clear()
+
+
+def _watch_unpack():
+    """A timer while the unpack runs: redraw the preferences, and tidy up when it ends."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "PREFERENCES":
+                area.tag_redraw()
+    if _unpacking["thread"] is not None and _unpacking["thread"].is_alive():
+        return 0.5
+    _unpacking["thread"] = None
+    _forget_reads()
+    return None
+
+
+class DV2_OT_unpack(Operator):
+    """Unpack the game into the game folder: every file the engine loads, and its documents, named. About 7 GB and a minute. Press again to stop"""
+
+    bl_idname = "divinity2.unpack"
+    bl_label = "Unpack the game"
+
+    def execute(self, context):
+        if _unpacking["thread"] is not None:
+            _unpacking["stop"] = True
+            return {"FINISHED"}
+        prefs = context.preferences.addons[PACKAGE].preferences
+        game = prefs.install or locate.find_game()
+        packed = locate.packed_of(game) if game else None
+        if packed is None:
+            self.report({"ERROR"}, f"No Divinity II archives in {game}" if game else
+                        "Set the Divinity II install: the folder holding Data and bin")
+            return {"CANCELLED"}
+        if not prefs.game_root:
+            self.report({"ERROR"}, "Set the game folder to unpack into")
+            return {"CANCELLED"}
+        out = Path(prefs.game_root)
+        out.mkdir(parents=True, exist_ok=True)
+        # A folder that holds anything but an earlier unpack is someone's files.
+        if any(out.iterdir()) and not (out / "unpack.json").is_file():
+            self.report({"ERROR"}, f"{out} is not empty: choose an empty folder")
+            return {"CANCELLED"}
+        if shutil.disk_usage(out).free < UNPACKED_BYTES:
+            self.report({"ERROR"}, f"Unpacking needs about 7 GB free in {out}")
+            return {"CANCELLED"}
+
+        def progress(done, total):
+            _unpacking["done"], _unpacking["total"] = done, total
+            if _unpacking["stop"]:
+                raise _Stopped
+
+        def work():
+            try:
+                meta = unpack.unpack(packed, out, progress)
+                _unpacking["said"] = f"Unpacked {meta['files']:,} files and {meta['documents']:,} documents"
+            except _Stopped:
+                _unpacking["said"] = (f"Stopped at {_unpacking['done']:,} of {_unpacking['total']:,} "
+                                      "files: unpack again to finish")
+            except Exception as exc:
+                _unpacking["said"] = f"Unpacking failed: {exc}"
+
+        _unpacking.update(done=0, total=0, stop=False, said="")
+        _unpacking["thread"] = threading.Thread(target=work, daemon=True)
+        _unpacking["thread"].start()
+        bpy.app.timers.register(_watch_unpack, first_interval=0.5)
+        return {"FINISHED"}
 
 
 class DV2_AddonPreferences(AddonPreferences):
     bl_idname = PACKAGE
 
-    game_root: StringProperty(
-        name="Game folder",
-        description="The folder `python -m dv2mod.core.bundle game <folder>` wrote: "
-                    "the game's files as the engine loads them, and its documents, named",
+    install: StringProperty(
+        name="Divinity II install",
+        description="The Developer's Cut as installed, the folder holding Data and bin. "
+                    "Empty: every Steam library is searched",
         subtype="DIR_PATH",
         default="",
     )
 
-    documents: StringProperty(
-        name="Documents, if elsewhere",
-        description="Only when the documents are not in the game folder: a folder "
-                    "`python -m dv2mod.core.bundle all <folder>` wrote",
+    game_root: StringProperty(
+        name="Game folder",
+        description="An empty folder the game is unpacked into, and read from",
         subtype="DIR_PATH",
         default="",
     )
 
     def draw(self, context):
         layout = self.layout
+        layout.prop(self, "install")
         layout.prop(self, "game_root")
-        if self.game_root and not catalog.looks_like_game(self.game_root):
-            layout.label(text="No Win32 folder here: extract the game with dv2mod", icon="ERROR")
-        layout.prop(self, "documents")
-        if _documents(self) and not (Path(_documents(self)) / "docs").is_dir():
-            layout.label(text="No docs folder: regions need dv2mod's named documents", icon="ERROR")
+        running = _unpacking["thread"] is not None
+        row = layout.row()
+        row.operator(DV2_OT_unpack.bl_idname, text="Stop unpacking" if running else "Unpack the game",
+                     icon="CANCEL" if running else "PACKAGE")
+        if running:
+            total = _unpacking["total"] or 1
+            row.label(text=f"{_unpacking['done']:,} of {_unpacking['total']:,} files "
+                           f"({100 * _unpacking['done'] // total} %)")
+        elif _unpacking["said"]:
+            row.label(text=_unpacking["said"])
+        elif self.game_root and not catalog.looks_like_game(self.game_root):
+            row.label(text="Not unpacked yet", icon="ERROR")
+        elif self.game_root and not (Path(self.game_root) / "docs").is_dir():
+            row.label(text="No documents: regions need them, unpack again", icon="ERROR")
 
 
 def _asset_items(self, context):
     root = _game_root(context)
     if not root:
-        return [("", "Set the game folder in Preferences", "")]
+        return [("", "Unpack the game in Preferences", "")]
     found = catalog.search(root, self.search)
     if not found:
         return [("", "Nothing matches", "")]
@@ -88,7 +180,7 @@ class DV2_OT_import_asset(Operator):
 
     def invoke(self, context, event):
         if not _game_root(context):
-            self.report({"ERROR"}, "Set the Divinity II game folder in Preferences")
+            self.report({"ERROR"}, "Unpack the game in the add-on's Preferences")
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self)
 
@@ -138,7 +230,7 @@ class DV2_OT_import_asset(Operator):
 def _region_items(self, context):
     root = _game_root(context)
     found = region.regions(root) if root else []
-    return [(n, n, "") for n in found] or [("", "No regions: the documents are missing, see Preferences", "")]
+    return [(n, n, "") for n in found] or [("", "No regions: unpack the game, see Preferences", "")]
 
 
 def _sub_items(self, context):
@@ -190,7 +282,7 @@ class DV2_OT_import_region(Operator):
 
     def invoke(self, context, event):
         if not _game_root(context):
-            self.report({"ERROR"}, "Set the Divinity II game folder in Preferences")
+            self.report({"ERROR"}, "Unpack the game in the add-on's Preferences")
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -230,7 +322,7 @@ class DV2_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         if not _game_root(context):
-            layout.label(text="Set the game folder in Preferences", icon="ERROR")
+            layout.label(text="Unpack the game in Preferences", icon="ERROR")
             return
         layout.operator(DV2_OT_import_asset.bl_idname, icon="OUTLINER_OB_ARMATURE")
         layout.operator(DV2_OT_import_region.bl_idname, icon="WORLD")
@@ -241,7 +333,7 @@ def _menu(self, context):
     self.layout.operator(DV2_OT_import_region.bl_idname, text="Divinity II region")
 
 
-_classes = (DV2_AddonPreferences, DV2_OT_import_asset,
+_classes = (DV2_OT_unpack, DV2_AddonPreferences, DV2_OT_import_asset,
             DV2_OT_import_region, DV2_PT_panel)
 
 
@@ -252,6 +344,9 @@ def register():
 
 
 def unregister():
+    _unpacking["stop"] = True
+    if bpy.app.timers.is_registered(_watch_unpack):
+        bpy.app.timers.unregister(_watch_unpack)
     bpy.types.TOPBAR_MT_file_import.remove(_menu)
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

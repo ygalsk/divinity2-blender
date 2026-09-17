@@ -7,25 +7,25 @@ whole region.
 ## Install it once
 
 The game keeps its files in archives, and names inside its XML are hashes. The
-add-on opens neither: [dv2mod](https://github.com/ygalsk/dv2-mod), the modding
-tool for the game, unpacks the one and names the other, once.
+add-on unpacks the one and names the other, once, with
+[divinity2-lib](https://github.com/ygalsk/divinity2-lib), which it carries.
 
-1. **Unpack the game with dv2mod.** Install dv2mod as its README says, then:
-
-       python -m dv2mod.core.bundle game <folder>
-
-   It finds a Steam copy by itself; otherwise give the game's
-   `Data/Win32/Packed` folder as the last argument. `<folder>` then holds the
-   game's files as the engine loads them -- 34,857 files, 6.9 GB -- and the
-   3,972 documents, named, under `docs/`. Measured on the Steam Developer's
-   Cut: 44 s.
-2. **Install the add-on.** In Blender, *Edit > Preferences > Get Extensions*,
+1. **Install the add-on.** In Blender, *Edit > Preferences > Get Extensions*,
    the drop-down menu in the top right, *Install from Disk*, and pick
    `divinity2-<version>.zip`. Blender enables it straight away.
-3. **Point it at the folder.** Still in Preferences, open the add-on and set
-   **Game folder** to `<folder>`. If something is missing, the field says so.
+2. **Unpack the game.** Still in Preferences, open the add-on, set **Game
+   folder** to an empty folder, and press **Unpack the game**. A Steam copy of
+   the Developer's Cut is found by itself; any other install, set **Divinity II
+   install** to the folder holding `Data` and `bin` first. The button shows how
+   far it is, and pressing it again stops. The folder then holds the game's
+   files as the engine loads them -- 34,857 files, 6.9 GB -- and the 3,972
+   documents, named, under `docs/`. Measured on the Steam Developer's Cut: 48 s
+   inside Blender, 37 s as `python -m dv2lib unpack <folder>`.
 
-Nothing is written into the game or into `<folder>`. Converted textures go to
+   The original Ego Draconis stores its archives in an older version the
+   unpacker does not read.
+
+Nothing is written into the game, and after unpacking nothing into the game folder. Converted textures go to
 the add-on's own user folder, which Blender keeps across upgrades and removes
 with the add-on.
 

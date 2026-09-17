@@ -19,13 +19,18 @@ NIF_VERSION = 0x14030009
 #: The two user versions that mark the Divinity 2 variant of that version.
 USER_VERSIONS = (0x20000, 0x30000)
 
-_VENDOR = Path(__file__).resolve().parent.parent / "vendor"
+_WHEELS = Path(__file__).resolve().parent.parent / "wheels"
 
 
 def _reader():
-    if str(_VENDOR) not in sys.path:
-        sys.path.insert(0, str(_VENDOR))
-    from nifgen.formats.nif import NifFile
+    try:
+        from nifgen.formats.nif import NifFile
+    except ImportError:
+        # Installed, Blender has unpacked the manifest's wheel into its own
+        # site-packages. A working tree loaded as a package of its own -- a
+        # test, the Unity port -- reads the same wheel as a zip instead.
+        sys.path.extend(str(p) for p in _WHEELS.glob("nifgen-*.whl"))
+        from nifgen.formats.nif import NifFile
 
     return NifFile
 
