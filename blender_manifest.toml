@@ -39,4 +39,5 @@ paths_exclude_pattern = [
   "/.claude/",
   "/.gitignore",
   "/CLAUDE.md",
+  "/DECISIONS.md",
 ]

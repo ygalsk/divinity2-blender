@@ -6,3 +6,6 @@ __pycache__/
 # the built extension
 *.zip
 .claude/
+
+# kept locally, never committed
+DECISIONS.md
