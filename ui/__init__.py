@@ -1,8 +1,10 @@
-"""The whole interface: one import operator and one panel.
+"""The whole interface: two import operators and one panel.
 
 Choose a name, press OK, the asset arrives. No file browser, no preferences
-beyond the game's location, no command line.
+beyond the game's folder, no command line.
 """
+
+from pathlib import Path
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
@@ -10,21 +12,46 @@ from bpy.types import AddonPreferences, Operator, Panel
 
 from ..blender.importer import import_asset
 from ..blender.region import ALL, KINDS, import_region
-from ..divinity2 import catalog, region
+from ..divinity2 import catalog, docs, region
 
 PACKAGE = __package__.rpartition(".")[0]
 
 
 def _game_root(context) -> str:
-    return context.preferences.addons[PACKAGE].preferences.game_root
+    prefs = context.preferences.addons[PACKAGE].preferences
+    # Every entry point asks for the game first, so the documents are
+    # registered here once rather than in each operator.
+    docs.use(_documents(prefs))
+    return prefs.game_root
+
+
+def _cache() -> str:
+    """Converted textures, in the add-on's own user folder: kept across upgrades, gone
+    with the add-on (`bpy.utils.extension_path_user`; the manual's "Local Storage")."""
+    return bpy.utils.extension_path_user(PACKAGE, path="texture-cache", create=True)
+
+
+def _documents(prefs) -> str:
+    """Where the named documents are: their own folder when one is set, else the game's,
+    where `python -m dv2mod.core.bundle game` writes them."""
+    return prefs.documents or prefs.game_root
 
 
 class DV2_AddonPreferences(AddonPreferences):
     bl_idname = PACKAGE
 
     game_root: StringProperty(
-        name="Divinity II install",
-        description="The folder holding Win32 and World",
+        name="Game folder",
+        description="The folder `python -m dv2mod.core.bundle game <folder>` wrote: "
+                    "the game's files as the engine loads them, and its documents, named",
+        subtype="DIR_PATH",
+        default="",
+    )
+
+    documents: StringProperty(
+        name="Documents, if elsewhere",
+        description="Only when the documents are not in the game folder: a folder "
+                    "`python -m dv2mod.core.bundle all <folder>` wrote",
         subtype="DIR_PATH",
         default="",
     )
@@ -33,13 +60,16 @@ class DV2_AddonPreferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "game_root")
         if self.game_root and not catalog.looks_like_game(self.game_root):
-            layout.label(text="No Win32 folder here", icon="ERROR")
+            layout.label(text="No Win32 folder here: extract the game with dv2mod", icon="ERROR")
+        layout.prop(self, "documents")
+        if _documents(self) and not (Path(_documents(self)) / "docs").is_dir():
+            layout.label(text="No docs folder: regions need dv2mod's named documents", icon="ERROR")
 
 
 def _asset_items(self, context):
     root = _game_root(context)
     if not root:
-        return [("", "Set the install path in Preferences", "")]
+        return [("", "Set the game folder in Preferences", "")]
     found = catalog.search(root, self.search)
     if not found:
         return [("", "Nothing matches", "")]
@@ -58,7 +88,7 @@ class DV2_OT_import_asset(Operator):
 
     def invoke(self, context, event):
         if not _game_root(context):
-            self.report({"ERROR"}, "Set the Divinity II install path in Preferences")
+            self.report({"ERROR"}, "Set the Divinity II game folder in Preferences")
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self)
 
@@ -96,7 +126,7 @@ class DV2_OT_import_asset(Operator):
         if chosen is None:
             return {"CANCELLED"}
 
-        result = import_asset(chosen, _game_root(context))
+        result = import_asset(chosen, _game_root(context), cache=_cache())
         self.report(
             {"INFO"},
             f"{len(result.objects)} objects, {result.bones} bones, "
@@ -108,7 +138,7 @@ class DV2_OT_import_asset(Operator):
 def _region_items(self, context):
     root = _game_root(context)
     found = region.regions(root) if root else []
-    return [(n, n, "") for n in found] or [("", "No World folder here", "")]
+    return [(n, n, "") for n in found] or [("", "No regions: the documents are missing, see Preferences", "")]
 
 
 def _sub_items(self, context):
@@ -122,6 +152,21 @@ def _sub_items(self, context):
     return items
 
 
+#: The time item that leaves the choice to the game. An empty identifier would make
+#: it a separator, not a choice (`bpy.props.EnumProperty`).
+GAME_TIME = "<game>"
+
+
+def _time_items(self, context):
+    """The game's own choice first, then every time setting the sub-region lists."""
+    root = _game_root(context)
+    listed = (region.time_settings(root, self.region_name, self.sub)
+              if root and self.region_name and self.sub != ALL else [])
+    _time_items.keep = [(GAME_TIME, "As the game does", "`CGameLogic_SubRegion::Load`'s choice")] \
+        + [(t, t, "A time setting this sub-region lists") for t in listed]
+    return _time_items.keep     # Blender needs the strings kept alive
+
+
 class DV2_OT_import_region(Operator):
     """Import a whole Divinity II region: ground, props, people, lights"""
 
@@ -131,10 +176,7 @@ class DV2_OT_import_region(Operator):
 
     region_name: EnumProperty(name="Region", items=_region_items)
     sub: EnumProperty(name="Sub-region", items=_sub_items)
-    time: EnumProperty(
-        name="Time of day",
-        items=[(t, t, "Which Lights folder to read") for t in region.TIMES],
-    )
+    time: EnumProperty(name="Time of day", items=_time_items)
     terrain: BoolProperty(name="Ground", default=True)
     scenery: BoolProperty(name="Scenery", default=True)
     item: BoolProperty(name="Items", default=True)
@@ -142,11 +184,13 @@ class DV2_OT_import_region(Operator):
     light: BoolProperty(name="Lights", default=True)
     tree: BoolProperty(name="Trees", default=True)
     trigger: BoolProperty(name="Triggers", default=False)
-    vegetation: BoolProperty(name="Vegetation library", default=False)
+    # Off by default: the grass is thousands of objects, and a first look at
+    # a region is faster without it.
+    vegetation: BoolProperty(name="Grass", default=False)
 
     def invoke(self, context, event):
         if not _game_root(context):
-            self.report({"ERROR"}, "Set the Divinity II install path in Preferences")
+            self.report({"ERROR"}, "Set the Divinity II game folder in Preferences")
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -162,7 +206,8 @@ class DV2_OT_import_region(Operator):
     def execute(self, context):
         chosen = tuple(k for k in KINDS if getattr(self, k))
         built = import_region(
-            _game_root(context), self.region_name, self.sub, self.time, chosen
+            _game_root(context), self.region_name, self.sub,
+            "" if self.time == GAME_TIME else self.time, chosen, cache=_cache()
         )
         for failure in built.failed[:5]:
             self.report({"WARNING"}, failure)
@@ -185,7 +230,7 @@ class DV2_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         if not _game_root(context):
-            layout.label(text="Set the install path in Preferences", icon="ERROR")
+            layout.label(text="Set the game folder in Preferences", icon="ERROR")
             return
         layout.operator(DV2_OT_import_asset.bl_idname, icon="OUTLINER_OB_ARMATURE")
         layout.operator(DV2_OT_import_region.bl_idname, icon="WORLD")

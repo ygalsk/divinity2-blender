@@ -10,7 +10,7 @@ from pathlib import Path
 
 import bpy
 
-from ..divinity2 import attach, graph, rig
+from ..divinity2 import attach, graph, rig, static_asset, terrain
 from ..divinity2.character import read_clips, read_model
 from ..divinity2.nif import UNITS_PER_METRE
 
@@ -30,6 +30,7 @@ class Result:
     skinned: int = 0
     attached: int = 0
     hidden_lods: int = 0
+    grafted: int = 0         #: terrain and static asset stubs filled from their streamed files
     materials: int = 0
     clips: int = 0
     actions: list = field(default_factory=list)
@@ -42,10 +43,25 @@ def import_asset(
     scale=None,
     with_animation: bool = True,
     shared_clips: bool = True,
+    extra_clips=(),
+    standard_data: bool = False,
 ) -> Result:
-    """Read any model file and build it: armature, meshes, skin, materials, clips."""
+    """Read any model file and build it: armature, meshes, skin, materials, clips.
+
+    `extra_clips` are clips from elsewhere that play on this skeleton -- a
+    region's `customanimations.kf`, named by the scripts of the characters that
+    stand in it. They come after the character's own and its family's.
+
+    `standard_data`: the model is region geometry, a static asset or terrain,
+    which the engine runs through `CShadingTools::SetupStandardData`
+    (`divinity2.material.STANDARD_DATA`).
+    """
     game_root = Path(game_root)
     cache = Path(cache) if cache else game_root.parent / ".dv2-texture-cache"
+    # A model alone has no region: the engine's registration defaults light it.
+    for key, value in dv2_material.GLOBALS.items():
+        if f"dv2_{key}" not in bpy.context.scene:
+            bpy.context.scene[f"dv2_{key}"] = value
     character = read_model(path)
     result = Result()
 
@@ -75,6 +91,11 @@ def import_asset(
             carried_so_far += 1
 
         factor = _factor(mesh.root, scale)
+        # A region's terrain stubs are empty until their streamed files are
+        # hung under them. Everything else has no manifest and is untouched.
+        result.grafted += terrain.graft(mesh.root, path)
+        # A region's static assets likewise, at the finest level (`divinity2.static_asset`).
+        result.grafted += static_asset.graft(mesh.root, game_root)
         for drawn in graph.walk(mesh.root):
             obj = scene.build_mesh(drawn, factor, rest)
             obj["dv2_path"] = drawn.path
@@ -85,7 +106,8 @@ def import_asset(
                 obj.hide_render = True
                 result.hidden_lods += 1
 
-            built = dv2_material.build_material(drawn, game_root, cache, path)
+            built = dv2_material.build_material(drawn, game_root, cache, path, standard_data,
+                                                 mesh.entry)
             if built is not None:
                 obj.data.materials.append(built)
                 result.materials += 1
@@ -114,6 +136,8 @@ def import_asset(
                 if clip.name not in known:
                     known.add(clip.name)
                     clips.append(clip)
+    known = {c.name for c in clips}
+    clips += [c for c in extra_clips if c.name not in known]
     result.clips = len(clips)
 
     if with_animation and clips and result.armature is not None:

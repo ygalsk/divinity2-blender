@@ -5,3 +5,4 @@ __pycache__/
 
 # the built extension
 *.zip
+.claude/

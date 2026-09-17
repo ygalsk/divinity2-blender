@@ -1,21 +1,33 @@
 # Using it
 
 Everything this add-on does is reachable from two places: the **Divinity II**
-tab in the 3D sidebar, and **File > Import**. There is no command line, no
-extraction step and no settings beyond the game's folder. Two buttons: one
-model, or one whole region.
+tab in the 3D sidebar, and **File > Import**. Two buttons: one model, or one
+whole region.
 
 ## Install it once
 
-1. **Edit > Preferences > Add-ons > Install from Disk**, pick
-   `divinity2-<version>.zip`. Blender enables it straight away.
-2. Still in Preferences, open the add-on and set **Divinity II install** to
-   the folder that holds `Win32` — for a Steam copy that is
-   `steamapps/common/divinity2_dev_cut/`. If the path is wrong the field says
-   so.
+The game keeps its files in archives, and names inside its XML are hashes. The
+add-on opens neither: [dv2mod](https://github.com/ygalsk/dv2-mod), the modding
+tool for the game, unpacks the one and names the other, once.
 
-Nothing is copied out of the game. The add-on reads the install where it is,
-and writes converted textures to a cache folder beside it.
+1. **Unpack the game with dv2mod.** Install dv2mod as its README says, then:
+
+       python -m dv2mod.core.bundle game <folder>
+
+   It finds a Steam copy by itself; otherwise give the game's
+   `Data/Win32/Packed` folder as the last argument. `<folder>` then holds the
+   game's files as the engine loads them -- 34,857 files, 6.9 GB -- and the
+   3,972 documents, named, under `docs/`. Measured on the Steam Developer's
+   Cut: 44 s.
+2. **Install the add-on.** In Blender, *Edit > Preferences > Get Extensions*,
+   the drop-down menu in the top right, *Install from Disk*, and pick
+   `divinity2-<version>.zip`. Blender enables it straight away.
+3. **Point it at the folder.** Still in Preferences, open the add-on and set
+   **Game folder** to `<folder>`. If something is missing, the field says so.
+
+Nothing is written into the game or into `<folder>`. Converted textures go to
+the add-on's own user folder, which Blender keeps across upgrades and removes
+with the add-on.
 
 ## Import something
 
@@ -28,7 +40,7 @@ button. Type a name and press OK.
 - A name that matches exactly, or matches only one asset, needs no pick: a
   script can call the operator with the name alone.
 
-There are 3,525 models in the install, of six kinds:
+There are 3,599 models in the install, of six kinds:
 
 | kind | how many | what it is |
 |---|---|---|
@@ -36,7 +48,7 @@ There are 3,525 models in the install, of six kinds:
 | scenery | 1,695 | walls, doors, trees, furniture, ruins |
 | item | 886 | weapons, armour, containers, loot |
 | effect | 378 | spell and particle effects |
-| terrain | 221 | compiled props, one folder of pieces each |
+| terrain | 295 | compiled props, one folder of pieces each |
 | fortress | 21 | the flying fortresses, skinned |
 
 Names follow the game's own prefixes, which is the fastest way to browse:
@@ -51,21 +63,25 @@ lights and the triggers, in one go.
 - **Region** lists the 19 the game ships; **Sub-region** its interiors.
 - **Time of day** picks which `Lights` folder to read — the sun and the lamps
   are authored three times.
-- The tick boxes choose what to build. Triggers and the vegetation library are
-  off by default: triggers are wireframe volumes that get in the way, and the
-  vegetation library arrives unplaced (`docs/regions.md`, section 10).
+- The tick boxes choose what to build. Triggers and grass are off by default:
+  triggers are wireframe volumes that get in the way, and the grass is
+  thousands of objects, grown the way the engine grows it
+  (`docs/vegetation.md`).
 
-Each kind lands in its own collection — `Banditcamp scenery`,
-`Banditcamp light`, and so on — so you can switch off what you are not working
-on. A hidden `Banditcamp models` collection holds one copy of each mesh; every
-placement in the scene is a linked copy of it, so 775 props cost 105 meshes.
+Each kind lands in its own collection — `Banditcamp Main scenery`,
+`Banditcamp Main light`, and so on — so you can switch off what you are not
+working on. A hidden `Banditcamp Main models` collection holds one copy of each
+model; every placement in the scene is a linked copy of it, so Banditcamp/Main's
+732 scenery placements share 194 meshes.
 
 Everything the game's files said is kept on the object as a custom property:
 `dv2_uuid`, `dv2_kind`, `dv2_prototype`, `dv2_path`, and for a tree its
 `dv2_model` and `dv2_spt`. Nothing is dropped on the way in.
 
-Banditcamp, whole: 157 models imported, 732 scenery, 169 items, 47 characters,
-96 lights, 82 triggers, 59 trees, 69 pieces of built geometry, 0 failures.
+Banditcamp/Main with grass, measured with the add-on installed from its zip
+into an empty Blender 5.2 profile: 190 models, 75 pieces of ground and built
+geometry, 732 scenery, 199 items, 99 characters, 96 lights, 59 trees and 4,737
+plants, nothing unresolved, in 50 seconds.
 
 ## What arrives
 
@@ -88,6 +104,18 @@ Materials are Principled BSDF with the game's diffuse and normal map wired in,
 and transparency honoured: a cut-out surface like hair or a leaf uses alpha
 clipping, a blended one blends, an additive one casts no shadow.
 
+Two more things the file says about a surface are honoured, and both are
+mostly decided by what the file *does not* say:
+
+- **Vertex colours.** A shape's colours are always written onto the mesh as a
+  `RGBA` colour attribute, so nothing is lost. Whether they are drawn is the
+  shape's own `NiVertexColorProperty`: most scenery says to ignore them, and a
+  shape with no such property uses them, which is `nif.xml`'s stated default
+  and is what the regions' built geometry relies on.
+- **Two-sidedness.** Back faces are culled unless the shape carries a
+  `NiStencilProperty`, which in this game only ever says `DRAW_BOTH`. Banners,
+  flags, bushes and water plants have it; walls do not.
+
 ## Levels of detail
 
 A Divinity II file holds every level of detail at once. The add-on imports
@@ -98,6 +126,12 @@ you want them; otherwise ignore them.
 A compiled prop is the exception: its levels are separate files, one folder
 per model, and the add-on takes the finest of each piece. There is nothing
 hidden to reveal.
+
+A region's ground is the other exception, and it works the other way round:
+the level the region ships inline is the *coarse* one, and the fine levels are
+streamed from `Meshes/Terrain/Terrain_Patch_<i>/`. The add-on attaches them,
+so the ground you get is the ground the game draws — for Banditcamp that is
+36,883 vertices rather than 9,992. The coarse levels are still there, hidden.
 
 ## Getting it out again
 

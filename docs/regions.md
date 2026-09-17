@@ -36,7 +36,7 @@ World/<region>/<sub>/Vegetation.nif   the grass library, unplaced
 
 None of the `.xml` files is text. Each is Larian's binary XML inside an
 `xml::dom::CStreamableNode` block in a NIF container — the file carries a
-`.xml` extension and holds neither. See `divinity2/binxml.py`.
+`.xml` extension and holds neither. dv2mod reads it; see `divinity2/docs.py`.
 
 ## 1. The stream stores a node's children in reverse
 
@@ -153,16 +153,47 @@ something is on a node above.
 
 ## 6. The terrain needs both halves of its placement
 
-A patch ships `Meshes/Terrain/Terrain_Patch_<i>/0.nif`, `1.nif` and sometimes
-`2.nif`. `0.nif` is an `NiLODNode` holding one level inline plus **one empty
-stub node per streamed level**; the streamed file holds its geometry under a
-node of the same name as its stub.
+`StaticMeshes.nif` holds one `NiLODNode` per patch under
+`[--WorldProcessedTerrain--]`, and each holds **one level inline plus one
+empty stub node per streamed level**. A patch ships those streamed levels as
+`Meshes/Terrain/Terrain_Patch_<i>/0.nif`, `1.nif` and sometimes `2.nif`, each
+holding its geometry under a node named exactly as its stub.
+
+`Meshes/Terrain/AssetDataDescriptors.xml` is the manifest that pairs the two,
+and it is Larian binary XML like everything else here:
+
+```
+<AssetDataDescriptor base="Terrain_Patch_6">
+  <LODDistances>
+    <LODDistance name="RT_patch_A_LOW" distance="700000" index="0"/>
+    <LODDistance name="RT_patch_A_MAX" distance="0"      index="1"/>
+```
+
+`index` is the numbered file, `name` is the stub it fills, and `distance`
+orders the levels with 0 nearest. **The level shipped inline is not the one
+the game draws.** Eighteen sub-regions ship a manifest, and in every one of
+them the inline level is a coarse one:
+
+| region | inline | streamed, drawn |
+|---|---:|---:|
+| Banditcamp, all 7 patches | 9,992 | **36,883** |
+| RiverTown_FF, 7 of 13 patches | 24 each | **3,756 – 12,215** |
+
+Without the manifest, Banditcamp's ground is a quarter of the game's and
+RiverTown_FF's flying islands are faceted plates. `divinity2/terrain.py` reads
+it; `divinity2/lod.py` needs no part in it, because once a stub holds geometry
+`lod_children` already prefers it and hides the coarse level.
 
 **Neither file places the patch on its own.** The stub carries half the
 placement and the streamed node the other half, and the engine attaches one to
 the other. On `Terrain_Patch_0`, stub + node is
 `(11390.9, 62440.5, 11651.4)`, which is to within `0.000` exactly where
 `0.nif` already puts its own inline level.
+
+The two **compose** — the streamed node hangs under the stub keeping its own
+transform. Splicing the streamed node's children under the stub instead, and
+so dropping that transform, puts Banditcamp's `Terrain_Patch_0` 4,203 units
+east of where its own coarse level sits.
 
 The stub is matched to the streamed node **by name, not by position**: a patch
 carries one stub per level and their order is not fixed. Taking the first stub
@@ -179,20 +210,23 @@ recipe.
 `translate`, its colour as `diffuse_color`, its brightness as `dimmer` and its
 reach as `m_fMaxAttenuationRadius`.
 
-The sun has no position, only two angles, and the engine builds its basis in
-`CDirLight::UpdateVisual` as `MakeZRotation(angle_z) * MakeYRotation(angle_y)`.
-Which axis of that basis the light travels along is not written anywhere, so
-it was measured: over the nine regions that ship a `Day` set,
+The sun has no position, only two angles. `CDirLight::UpdateVisual` copies
+`MakeZRotation(angle_z) * MakeYRotation(angle_y)` into the light, and
+`NiDirectionalLight::UpdateWorldData` takes the world rotation's column 0 as
+the direction the light travels. Gamebryo's `NiMatrix3::MakeZRotation` writes
+`[[c, s, 0], [-s, c, 0], [0, 0, 1]]` and `MakeYRotation`
+`[[c, 0, -s], [0, 1, 0], [s, 0, c]]` -- the transposes of the textbook
+matrices -- so the sun travels along
 
-| axis | points below the horizon |
-|---|---:|
-| **−X** | **9 of 9** |
-| −Z | 8 of 9 |
-| +Z | 1 of 9 |
-| +X, +Y, −Y | 0 of 9 |
+    (cos y · cos z,  −cos y · sin z,  sin y)
 
-−X is the only one that is a sun in every region. The add-on aims Blender's
-sun down that vector.
+This used to be measured instead: the textbook product's −X was below the
+horizon in nine regions of nine. That vector has the right height and a
+mirrored x, and a check that asks only for the height cannot tell them apart.
+
+A spot light is a point light with an `NiTransform` (`CSpotLight::LoadXML`
+takes exactly those two children); it shines along column 0 of that transform
+(`NiSpotLight::UpdateWorldData`), with `fov` its cone.
 
 ## 8. Triggers
 
@@ -242,28 +276,125 @@ Both go to the SpeedTree shader as a trig pair (`g_vTreeRotationTrig`); what
 angle `instance.x` stands for is not resolved, so it is kept as a raw
 `dv2_rotation` and not applied.
 
-## 10. Vegetation is generated, not stored
+## 10. A water plane is geometry, and the XML beside it is only its style
+
+`CRegionVisual::ParseRegionNode` turns a node marked `UserPropBuffer=WaterPlane`
+into a `CWaterPlane`. The node is an ordinary shape in `StaticMeshes.nif` and
+was always being imported — as an opaque grey card, because the only texture
+it names is `_Gray.tga`. There are **26 of them across 10 sub-regions**, and
+`River` never appears as a marker anywhere.
+
+`Lights/<time>/waterplanedata_v2.xml` says what to draw them as, and it holds
+no positions at all. Its `WaterPlaneData name` is the node's own name:
+
+| sub-region | node | entry |
+|---|---|---|
+| `DZ1/Main` | `DZ_water_ocean` | `DZ_water_ocean` |
+| `DZ1/DZ_Harbour` | `Water` | `Water` |
+| `Banditcamp/Main` | `Pond_BC_01_A` | — |
+
+Banditcamp is the exception: its planes are named for ponds while its file
+holds only the three stock entries (`Waterplane_River`, `_Fall`, `_Ocean`). A
+plane with no entry of its own takes the first — which is a fallback rather
+than a guess only because **every entry in those files is identical**, and the
+add-on's test asserts exactly that before relying on it.
+
+## 11. Vegetation is generated, and the generator is in the binary
 
 `Vegetation.nif` is the region's **library** of grass and undergrowth: one
 `NiNode` per source file, named exactly as `vegetationtemplatedata.xml` names
-it (`GRS_BV_GrassSmall_D.nif`). The add-on can import that library, and does
-not pretend to place it.
+it (`GRS_BV_GrassSmall_D.nif`). Where each blade stands is *not* in any file.
+The engine generates it at load, and `divinity2.vegetation` now generates the
+same field, out of `Divinity2GUP.pdb`'s own symbols rather than out of a
+guess. The whole derivation is in `docs/vegetation.md`; the short of it:
 
-Where each blade stands is generated at load. `vegetationgridsettings.xml`
-lists the grid cells that carry vegetation (`-3_-10`, 553 of them in
-Banditcamp), and `Vegetation/VM_<x>_<y>.tga` is that cell's mask — which is
-how `CVegetationGridManager::GenerateVegetationGridEntryDescriptors` finds
-them, by scanning the folder for `VM_` and splitting the name. The instances
-themselves come out of `VeggyLib` from `PosSeed`, `PosNoiseType` and
-`PosNumOfSwizzles`. Reproducing that means reimplementing the engine's noise
-exactly, and a near-miss looks like a hit.
+| piece | where it comes from |
+|---|---|
+| the walk | `CVegetationPatch::ProcessVegetationMap`: 32x32 samples per cell, `u, v = 0 .. 31/32` |
+| the cell | 32 m -- `CVegetationGridManager` sets `m_usGridEntrySize = 0x20` |
+| the mask | `VM_<x>_<y>.tga`, read RGBA: **R** picks the template, **G** the size, **B** and **A** are the ground height the engine cached there |
+| the plant | `CTemplate::SelectData` draws one card from a deck of 1024, and each template's instance counts sum to exactly 1024 |
+| the deck | `CRandomNoise::UpdateValues`: `srand(PosSeed)`, then `2 ** PosNumOfSwizzles` swaps with the last card |
+| the size | `CPerlinNoise` on `SizeSeed`, `SizeGranularity` octaves, `SizePersistence`, clamped to `MinSize .. MaxSize`, times the mask's `G / 127.5` |
+| the turn, the tint, the jitter | `CPerlinNoise::IntNoise` -- the Hugo Elias hash, constants 15731 and 789221, and `0xd208dd0d` where the tutorial has 1376312589 |
+
+Two things had to be measured rather than read, and both are written down
+where they are used:
+
+* **A cell is centred on its index.** The engine's own patch node sits at
+  `index * width`, but the origin `ProcessVegetationMap` walks from comes
+  through the streaming letter, and following it there was not worth the
+  hour. Measured instead, against the ground of the built scene over every
+  offset from -32 to +32 m in both axes: `index * 32` is out by 11.68 m on
+  average and `index * 32 - 16` by 0.37 m. Half a cell, in both axes.
+* **`m_fRotation` is a turn, not an angle.** `CreateInstance` writes
+  `0.5 + 0.5 * IntNoise(...)`, which is 0..1, and the vertex shader that
+  reads it is compiled HLSL. Taking it as a full turn is ours, not the
+  game's, and it is the one step in the chain that is not proven.
+
+**Checked, 5,224 samples.** Every painted pixel whose cached height the game
+had already written, against the ground the add-on builds: **98.0% within
+10 cm**, median 8 mm. That number is what says the mask is read right, the
+cell is the right size, the origin is right and the axes are right -- four
+things at once, because getting any one of them wrong moves the answer.
+
+Banditcamp comes out at **4,737 plants** from 5,265 painted samples; the
+difference is the samples whose card fell on a template entry with no mesh.
+
+## 12. Checked on screen
+
+The first comparison against the running game, and the only check here that
+can fail for a reason no file can show. Source: a 100-second Banditcamp
+runthrough recorded with the coordinate overlay on, so every frame states
+`(x, y, z) in Banditcamp:Main`.
+
+**Where the player stood.** Twelve frames spread over the run, each giving a
+position the player actually occupied. For each, the nearest surface under
+his feet in the imported region:
+
+| | |
+|---|---:|
+| points sampled | 12 |
+| within 10 cm | **11** |
+| mean absolute error | **0.053 m** |
+| worst | 0.56 m |
+
+Eight land on `BC_terrain_*`, one on a `P_Terrain_SmallRock` the player was
+standing on, three on `BC_Room_A_bars` inside the cave. So the placement
+chain, the metre scale and the coordinate convention are right, not just
+self-consistent.
+
+**The streamed levels are not what fixes the floor.** Measured at the nine
+open-air points, the coarse level the region ships inline is already within
+0.21 m mean of the surface the player walked, against 0.19 m for the streamed
+level. The graft buys resolution and silhouette — and it is decisive for
+`RiverTown_FF`, whose inline level is a 24-vertex plate — but on Banditcamp's
+walkable ground the coarse level was never far wrong. Claiming otherwise
+would have been easy and false.
+
+**What the picture still lacks.** At `(122.20, 52.04, 1.34)`, facing −X (the
+heading the run itself gives: `t18 → t20` is `(−11.06, +0.05)`), the rock
+layout matches — dark wall close on the left, open floor to the left of
+centre, a bright face above it, rock masses right. A counter-render facing
+`+X` shows a different place entirely, which is what makes the match mean
+something. What differs is ground cover: the game's grass and its trees are
+absent, both by design (sections 9 and 11). Nothing in the comparison is
+explained by geometry being wrong.
 
 ## What is still open
 
-- **Vegetation scatter**, above.
-- **Water planes.** `UserPropBuffer=WaterPlane` marks them in
-  `StaticMeshes.nif` and `Lights/<time>/waterplanedata_v2.xml` describes them;
-  neither is read yet.
-- **`BC_ShadowHide_01`**, section 5: no flag explains it.
+- **Three of the ten numbers on a water plane.** `waterplanedata_v2.xml`
+  stores attribute names as hashes, and seven were recovered by hashing
+  candidates until they matched — `wavestrength`, `wavesize`, `wavespeed`,
+  `fresneloffset`, `lodstrength`, `sunstrength`, `texscale`, all lower case.
+  `0xab083eab`, `0xc320b415` and `0x7b084ff6` are not resolved. None of them
+  is needed to draw the surface, and the engine's own symbols would settle
+  them in one query.
+- **The turn a plant is given.** `CVeggyInstance::m_fRotation` is 0..1 and the
+  shader that reads it is compiled HLSL. One full turn is our reading, and
+  the only step of the vegetation chain that is not proven.
+- **The game's camera rig.** Position and heading are recoverable from the
+  overlay; the boom length, field of view and pitch are not, so a screen
+  comparison matches layout rather than pixels.
 - **Physics.** `Physics.nxb` is NVIDIA PhysX 2 `NxuStream` binary — a set of
   collision hulls, nothing visual, and nothing needs it to look right.

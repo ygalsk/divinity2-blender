@@ -16,53 +16,18 @@ from mathutils import Matrix, Quaternion, Vector
 
 from ..divinity2 import animation as dv2_animation
 
-#: A component the file does not carry is written as -FLT_MAX, not left out.
-#: `trs_valid`, which is supposed to say which of the three are present, is an
-#: empty array at NIF 20.3.0.9 -- the version does not write it. The sentinel
-#: in the value is the only thing that tells the truth.
-INVALID = 3.4028234663852886e38
-
-
-def _present(value: float) -> bool:
-    return abs(value) < INVALID
-
-
-def _static(transform, factor: float):
-    """The value of a track that is not animated."""
-    location = Vector((0.0, 0.0, 0.0))
-    rotation = Quaternion((1.0, 0.0, 0.0, 0.0))
-    scale = 1.0
-
-    if transform is not None:
-        t = transform.translation
-        if _present(t.x) and _present(t.y) and _present(t.z):
-            location = Vector((t.x, t.y, t.z)) * factor
-
-        r = transform.rotation
-        if _present(r.w) and _present(r.x):
-            candidate = Quaternion((r.w, r.x, r.y, r.z))
-            if candidate.magnitude > 1e-6:
-                rotation = candidate.normalized()
-
-        if _present(transform.scale) and transform.scale > 0.0:
-            scale = transform.scale
-
-    return location, rotation, scale
-
-
 def _sample(track, at: float, factor: float):
-    """Location, rotation and scale of one bone at one point in the clip."""
-    location, rotation, scale = _static(track.static, factor)
-
-    if track.translations:
-        t = dv2_animation.evaluate(track.translations, at)
-        location = Vector(t) * factor
-    if track.rotations:
-        r = dv2_animation.evaluate(track.rotations, at)
+    """Location, rotation and scale of one bone at one point in the clip
+    (`divinity2.animation.sample`). A stated rotation of no length and a stated
+    scale that is not positive read as the identity; an animated one as given."""
+    t, r, s = dv2_animation.sample(track, at)
+    location = Vector(t) * factor if t is not None else Vector((0.0, 0.0, 0.0))
+    rotation = Quaternion((1.0, 0.0, 0.0, 0.0))
+    if r is not None and (track.rotations or Quaternion(r).magnitude > 1e-6):
         rotation = Quaternion(r).normalized()
-    if track.scales:
-        scale = dv2_animation.evaluate(track.scales, at)[0]
-
+    scale = 1.0
+    if s is not None and (track.scales or s > 0.0):
+        scale = s
     return location, rotation, scale
 
 

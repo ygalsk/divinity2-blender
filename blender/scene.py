@@ -14,13 +14,33 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from ..divinity2 import graph
+from ..divinity2 import graph, lod
 from ..divinity2 import skin as dv2_skin
 
-#: Game units per metre. The game's own unit is roughly a centimetre; this is
-#: the factor that puts a character at a believable height in Blender. It is a
-#: measurement, not a constant of the format -- see `docs/units.md`.
-UNITS_PER_METRE = 100.0
+#: What the mesh's colour attribute is called. The NifTools addon uses this
+#: name too, so a file that has been through both reads the same either way.
+VERTEX_COLOURS = "RGBA"
+#: The engine's binormal and its sign, per vertex, as the last two UV maps:
+#: (x, y) in the first, (z, sign) in the second, in the shape's own space.
+#:
+#: The engine builds its normal-map frame from them. `TransformNBT` takes B
+#: from the stream `NiD3DShaderDeclaration::PackEntry` binds as
+#: `SHADERPARAM_NI_BINORMAL` -- the first block after the normals, which
+#: `nif.xml` names `Tangents` -- and the Developer's Cut makes it a float4 whose
+#: w is `DIV2 Floats` (+1 where the shape has none): `T = cross(N, B) * w`,
+#: "should be -1 when mirrored". The stored tangent is never read.
+#: (docs/sources.md, "Binormal and sign".)
+#:
+#: UV maps because FBX carries nothing else per corner exactly: Blender's
+#: writer drops generic attributes and colours are one channel already taken.
+#: Every shape gets both, zero where it stores no binormal, so they are always
+#: the last two channels on the far side.
+BINORMAL_UV = ("dv2_binormal_xy", "dv2_binormal_zs")
+
+
+def uv_name(index: int) -> str:
+    """The Blender UV map a NIF UV set becomes: set 0 is `UV0`, set 1 `UV1`."""
+    return f"UV{index}"
 
 
 def matrix_of(block) -> Matrix:
@@ -51,8 +71,7 @@ def rest_matrices(skeleton_root) -> dict:
         name = str(node.name)
         if name and not _is_shape(node):
             out.setdefault(name, world)
-        stack += [(c, world) for c in reversed(
-            [c for c in (getattr(node, "children", ()) or []) if c is not None])]
+        stack += [(c, world) for c in reversed(lod.child_nodes(node))]
     return out
 
 
@@ -78,8 +97,7 @@ def build_armature(skeleton_root, name: str, scale: float, rest: dict | None = N
     while stack:
         node, parent_world, parent = stack.pop()
         world = Matrix((parent_world @ graph.matrix_of(node)).tolist())
-        stack += [(c, parent_world @ graph.matrix_of(node), node) for c in reversed(
-            [c for c in (getattr(node, "children", ()) or []) if c is not None])]
+        stack += [(c, parent_world @ graph.matrix_of(node), node) for c in reversed(lod.child_nodes(node))]
         if _is_shape(node):
             continue
         bone_name = str(node.name)
@@ -153,9 +171,25 @@ def build_mesh(drawn, scale: float, rest: dict | None = None):
     name = drawn.name
 
     raw = np.array([(v.x, v.y, v.z) for v in data.vertices], dtype=np.float64)
-    moved = dv2_skin.to_rest_pose(raw, shape, rest) if rest else None
-    if moved is not None:
-        raw = moved
+    normals = np.array([(n.x, n.y, n.z) for n in data.normals], dtype=np.float64) \
+        if data.has_normals and len(data.normals) else None
+    count = len(raw)
+    binormals = np.array([(b.x, b.y, b.z) for b in data.tangents], dtype=np.float64) \
+        if len(getattr(data, "tangents", ()) or ()) else np.zeros((count, 3))
+    signs = np.array(list(data.div_2_floats), dtype=np.float64) \
+        if getattr(data, "has_div_2_floats", False) else np.ones(count)
+
+    # The game ships NaN binormals: 22 of `IT_Tavern_WineRed_A_100`'s 147. The
+    # engine's frame there is NaN; FBX refuses NaN outright. Zero is "no
+    # binormal", which the shaders read as no normal-map frame at that vertex.
+    binormals = np.nan_to_num(binormals, nan=0.0, posinf=0.0, neginf=0.0)
+
+    total = dv2_skin.rest_matrices(shape, rest, count) if rest else None
+    if total is not None:
+        # The geometry lives in skin space and is carried by the bones.
+        raw = dv2_skin.to_rest_pose(raw, total)
+        normals = dv2_skin.rotate(normals, total) if normals is not None else None
+        binormals = dv2_skin.rotate(binormals, total)
         world = Matrix.Identity(4)
 
     vertices = (raw * scale).tolist()
@@ -165,20 +199,34 @@ def build_mesh(drawn, scale: float, rest: dict | None = None):
     mesh.from_pydata(vertices, [], faces)
     mesh.validate(verbose=False)
 
-    if data.has_normals and len(data.normals):
-        mesh.normals_split_custom_set_from_vertices(
-            [(n.x, n.y, n.z) for n in data.normals]
+    if normals is not None:
+        mesh.normals_split_custom_set_from_vertices(normals.tolist())
+
+    # Kept whenever the shape holds them, whatever the shape's properties say
+    # to do with them. Writing the data here and deciding in the material
+    # keeps the mesh lossless: `divinity2.material.vertex_colour` is what
+    # says whether they reach the surface.
+    colours = getattr(data, "vertex_colors", None)
+    if colours is not None and len(colours):
+        layer = mesh.color_attributes.new(
+            name=VERTEX_COLOURS, type="FLOAT_COLOR", domain="POINT"
+        )
+        layer.data.foreach_set(
+            "color", [c for v in colours for c in (v.r, v.g, v.b, v.a)]
         )
 
-    # `has_uv` is a legacy field and reads 0 at NIF 20.3.0.9, whatever the
-    # shape actually carries. The truth is in `data_flags.num_uv_sets`.
-    if len(data.uv_sets):
-        uv_layer = mesh.uv_layers.new(name="UVMap")
-        source = data.uv_sets[0]
-        for loop in mesh.loops:
-            uv = source[loop.vertex_index]
-            # NIF puts the UV origin at the top left, Blender at the bottom.
-            uv_layer.data[loop.index].uv = (uv.u, 1.0 - uv.v)
+    # Every set the shape carries: the terrain samples its splat layers from
+    # set 1. `has_uv` is a legacy field and reads 0 at NIF 20.3.0.9, whatever
+    # the shape actually carries. The truth is in `data_flags.num_uv_sets`.
+    corners = np.empty(len(mesh.loops), dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", corners)
+    for index, source in enumerate(data.uv_sets):
+        uv = np.array([(t.u, t.v) for t in source], dtype=np.float32)[corners]
+        # NIF puts the UV origin at the top left, Blender at the bottom.
+        uv[:, 1] = 1.0 - uv[:, 1]
+        mesh.uv_layers.new(name=uv_name(index)).data.foreach_set("uv", uv.ravel())
+    for layer, pair in zip(BINORMAL_UV, (binormals[:, :2], np.column_stack([binormals[:, 2], signs]))):
+        mesh.uv_layers.new(name=layer).data.foreach_set("uv", pair.astype(np.float32)[corners].ravel())
 
     obj = bpy.data.objects.new(name, mesh)
     obj.matrix_world = _scaled(world, scale)

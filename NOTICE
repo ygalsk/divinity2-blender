@@ -1,0 +1,30 @@
+divinity2-blender
+Copyright (C) 2026 divinity2-blender contributors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See LICENSE for the full text.
+
+It reads the assets of Divinity II: Ego Draconis and Divinity II: Developer's
+Cut (Larian Studios, 2009). It ships none of them, and it is not endorsed by
+or affiliated with Larian Studios. You need your own copy of the game.
+
+
+Third-party code
+----------------
+
+vendor/nifgen
+    A Python reader for the NetImmerse/Gamebryo file formats, generated from
+    the NifTools project's `nif.xml` format specification. Vendored unchanged.
+
+    Copyright (C) 2005, NIF File Format Library and Tools contributors.
+    All rights reserved.
+    Licensed under the BSD 3-Clause License; the full text is in
+    vendor/nifgen/LICENSE.rst.
+
+    https://github.com/niftools/nifgen
+    https://github.com/niftools/nifxml
+
+The BSD 3-Clause License is compatible with the GNU General Public License
+version 3, so the combined work is distributed under the GPL.

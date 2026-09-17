@@ -43,6 +43,11 @@ HIDDEN = "NiHide"
 CULLED = 0x1
 
 
+def child_nodes(node) -> list:
+    """A node's children, without the empty slots a NIF list may hold."""
+    return [c for c in (getattr(node, "children", ()) or []) if c is not None]
+
+
 def _user_prop(shape) -> str:
     for extra in getattr(shape, "extra_data_list", None) or ():
         if extra is None:
@@ -82,7 +87,7 @@ def is_hidden(shape) -> bool:
 #: hold geometry in a coarser one.
 def lod_children(node):
     """(the child to show, the children to hide) for one `NiLODNode`."""
-    children = [c for c in (getattr(node, "children", ()) or []) if c is not None]
+    children = child_nodes(node)
     if not children:
         return None, []
     data = getattr(node, "lod_level_data", None)
@@ -105,7 +110,7 @@ def _holds_geometry(node) -> bool:
         if type(n).__name__ in ("NiTriShape", "NiTriStrips"):
             if data is not None and data.num_vertices:
                 return True
-        stack += [c for c in (getattr(n, "children", ()) or []) if c is not None]
+        stack += child_nodes(n)
     return False
 
 

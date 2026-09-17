@@ -124,6 +124,35 @@ def events(sequence) -> list[Event]:
     return [Event(time=float(k.time), text=str(k.value)) for k in keys.text_keys]
 
 
+#: A component the file does not carry is written as -FLT_MAX, not left out.
+#: `trs_valid`, which is supposed to say which of the three are present, is an
+#: empty array at NIF 20.3.0.9 -- the version does not write it. The sentinel
+#: in the value is the only thing that tells the truth.
+INVALID = 3.4028234663852886e38
+
+
+def sample(track: Track, at: float) -> tuple:
+    """`(translation, rotation wxyz, scale)` of one track at `0 <= at <= 1`, in the
+    file's own units. A component the track neither animates nor states is None."""
+    static = track.static
+    t = r = s = None
+    if static is not None:
+        tr, ro = static.translation, static.rotation
+        if all(abs(v) < INVALID for v in (tr.x, tr.y, tr.z)):
+            t = (tr.x, tr.y, tr.z)
+        if all(abs(v) < INVALID for v in (ro.w, ro.x, ro.y, ro.z)):
+            r = (ro.w, ro.x, ro.y, ro.z)
+        if abs(static.scale) < INVALID:
+            s = static.scale
+    if track.translations:
+        t = evaluate(track.translations, at)
+    if track.rotations:
+        r = evaluate(track.rotations, at)
+    if track.scales:
+        s = evaluate(track.scales, at)[0]
+    return t, r, s
+
+
 def tracks(sequence) -> list[Track]:
     """One track per controlled block of a `NiControllerSequence`."""
     out = []

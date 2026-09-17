@@ -11,6 +11,8 @@ is written onto the object as a `dv2_` property, so nothing is lost on the way
 in.
 """
 
+import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,7 +20,9 @@ import bpy
 from mathutils import Matrix, Vector
 
 from ..divinity2 import region as dv2_region
+from ..divinity2 import vegetation as dv2_vegetation
 
+from . import material as dv2_material
 from .importer import import_asset
 
 #: One collection per kind, in the order they are built.
@@ -80,18 +84,34 @@ def _matrix(placed) -> Matrix:
     return basis @ Matrix.Scale(placed.scale, 4)
 
 
-def _library(path, game_root, cache, into):
-    """Import one model once and hide it; every placement is a copy of this."""
+#: The kinds the engine loads as static assets, which `SetupStandardData` runs
+#: on (with the region's own nodes and the terrain). Scenery as a static asset
+#: is read off the loader's name (`CStaticAssetDataManager`), not traced.
+STANDARD_DATA_KINDS = ("terrain", "scenery")
+
+
+def _import_into(path, game_root, cache, into, **options) -> list:
+    """Import one model and move everything it made into `into` alone.
+
+    Each object keeps what the importer decided -- a culled or coarse shape is
+    already hidden -- as `dv2_drawn`, read before the move, since `into` may be
+    a hidden collection. `_copy` draws a copy by it.
+    """
     was = set(bpy.data.objects)
-    import_asset(path, game_root, cache=cache, with_animation=False)
+    import_asset(path, game_root, cache=cache, with_animation=False, **options)
     made = [o for o in bpy.data.objects if o not in was]
     for obj in made:
-        # Remember what the importer decided -- a culled or coarse shape is
-        # already hidden -- before hiding the template itself.
         obj["dv2_drawn"] = obj.visible_get() and not obj.hide_render
         for collection in list(obj.users_collection):
             collection.objects.unlink(obj)
         into.objects.link(obj)
+    return made
+
+
+def _library(path, game_root, cache, into, kind=""):
+    """Import one model once and hide it; every placement is a copy of this."""
+    made = _import_into(path, game_root, cache, into, standard_data=kind in STANDARD_DATA_KINDS)
+    for obj in made:
         obj.hide_set(True)
         obj.hide_render = True
     return made
@@ -123,30 +143,30 @@ def _copy(source, where: Matrix, into, name: str):
 def _describe(obj, placed):
     obj["dv2_kind"] = placed.kind
     obj["dv2_uuid"] = placed.uuid
-    for key, value in placed.fields.items():
-        obj[f"dv2_{key}"] = value
+    # The whole record in one property, as `dv2_material` is: a Blender property name
+    # holds at most 63 characters (`MAX_IDPROP_NAME - 1`, bl_operators/wm.py), and a trigger's
+    # `Trigger.Trigger_area.PolyArea.Points.AreaPoint[10].NiPoint3.x` is longer.
+    obj["dv2_fields"] = json.dumps(placed.fields)
 
 
 def _light(placed, into):
-    """A point light or the sun, as `divinity2.region` read it."""
+    """A point light, a spot or the sun, as `divinity2.region` read it."""
     shape = placed.fields.get("shape", "point")
     data = bpy.data.lights.new(placed.name or shape,
-                               "SUN" if shape == "sun" else "POINT")
+                               {"sun": "SUN", "spot": "SPOT"}.get(shape, "POINT"))
     data.color = placed.fields.get("colour", (1.0, 1.0, 1.0))
     dimmer = float(placed.fields.get("dimmer", 1.0))
     obj = bpy.data.objects.new(placed.name or shape, data)
     into.objects.link(obj)
 
+    if shape in ("sun", "spot"):
+        # The light travels along `direction`, its basis' column 0
+        # (`NiDirectionalLight` / `NiSpotLight::UpdateWorldData`); a Blender
+        # sun or spot shines along its own -Z.
+        obj.rotation_mode = "QUATERNION"
+        obj.rotation_quaternion = Vector(placed.fields["direction"]).to_track_quat("-Z", "Y")
     if shape == "sun":
         data.energy = dimmer * SUN_WATTS
-        basis = dv2_region.sun_basis(placed.fields.get("angle_y", 0.0),
-                                     placed.fields.get("angle_z", 0.0))
-        # The light travels along the basis' -X; a Blender sun shines along
-        # its own -Z. Point -Z there and let Blender pick the rest.
-        obj.rotation_mode = "QUATERNION"
-        obj.rotation_quaternion = Vector(
-            (-basis[0][0], -basis[1][0], -basis[2][0])
-        ).to_track_quat("-Z", "Y")
     else:
         radius = float(placed.fields.get("radius", 1.0))
         data.energy = dimmer * WATTS
@@ -154,6 +174,8 @@ def _light(placed, into):
         data.cutoff_distance = radius
         data.shadow_soft_size = max(float(placed.fields.get("inner", 0.0)), 0.01)
         obj.location = placed.position
+        if shape == "spot":
+            data.spot_size = math.radians(float(placed.fields.get("fov", 45.0)))
     _describe(obj, placed)
     return obj
 
@@ -206,7 +228,6 @@ def _world(placed):
     if world is None:
         world = bpy.data.worlds.new("Divinity II")
         bpy.context.scene.world = world
-    world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     if background is None:
         return world
@@ -217,12 +238,35 @@ def _world(placed):
     return world
 
 
+def _engine_globals(game_root, name: str, sub: str, time: str, statics) -> None:
+    """The engine's shader globals for this sub-region's time setting, on the
+    scene as `dv2_<name>`, where the materials read them (`material.GLOBALS`).
+    The global atmosphere collection only: Blender has no camera to weigh the
+    local volumes by (`divinity2.environment.frame`)."""
+    from ..divinity2 import environment as dv2_environment
+    from ..divinity2 import terrain as dv2_terrain
+
+    scene = bpy.context.scene
+    for key, value in dv2_material.GLOBALS.items():
+        scene[f"dv2_{key}"] = value
+    lit = dv2_environment.frame(dv2_environment.read(game_root, name, sub, time))
+    scene["dv2_fGlobalNormalScale"] = lit["globals"]["fGlobalNormalScale"]
+    scene["dv2_fGlobalLightmapIntensity"] = lit["settings"]["DarkMapBrightness"]
+    if statics is not None:
+        splat = dv2_terrain.splat(statics)
+        scene["dv2_g_TerrainSplatRadius"] = splat["radius"]
+        scene["dv2_g_TerrainSplatBlendRadius"] = splat["blend"]
+    # The materials decode to linear once and expect it back unchanged.
+    scene.view_settings.view_transform = "Standard"
+
+
 def _one(game_root, name: str, sub: str, time: str, kinds, cache,
          built: Built, library: dict) -> list:
     """Build one sub-region into its own collections. Returns them."""
     read = dv2_region.read(game_root, name, sub, time)
     made = []
     templates = None
+    _engine_globals(game_root, name, sub, time, read.statics)
 
     def _collection(label):
         return _named(f"{name} {sub} {label}", made)
@@ -231,13 +275,7 @@ def _one(game_root, name: str, sub: str, time: str, kinds, cache,
         built.counts[kind] = built.counts.get(kind, 0) + 1
 
     if "terrain" in kinds and read.statics is not None:
-        into = _collection("terrain")
-        was = set(bpy.data.objects)
-        import_asset(read.statics, game_root, cache=cache, with_animation=False)
-        for obj in [o for o in bpy.data.objects if o not in was]:
-            for collection in list(obj.users_collection):
-                collection.objects.unlink(obj)
-            into.objects.link(obj)
+        for _ in _import_into(read.statics, game_root, cache, _collection("terrain"), standard_data=True):
             count("terrain")
 
     for kind in ("scenery", "item", "character"):
@@ -257,7 +295,7 @@ def _one(game_root, name: str, sub: str, time: str, kinds, cache,
             key = str(placed.model)
             if key not in library:
                 try:
-                    library[key] = _library(placed.model, game_root, cache, templates)
+                    library[key] = _library(placed.model, game_root, cache, templates, kind)
                     built.models += 1
                 except Exception as exc:                       # noqa: BLE001
                     library[key] = []
@@ -283,20 +321,50 @@ def _one(game_root, name: str, sub: str, time: str, kinds, cache,
             count(kind)
 
     if "vegetation" in kinds and read.vegetation is not None:
-        into = _collection("vegetation")
-        was = set(bpy.data.objects)
-        import_asset(read.vegetation, game_root, cache=cache, with_animation=False)
-        for obj in [o for o in bpy.data.objects if o not in was]:
-            for collection in list(obj.users_collection):
-                collection.objects.unlink(obj)
-            into.objects.link(obj)
-            count("vegetation")
-        into.hide_viewport = True
+        _vegetation(game_root, name, sub, read, _collection, cache, count)
 
     return made
 
 
-def import_region(game_root, name: str, sub: str = "Main", time: str = "Day",
+def _vegetation(game_root, name, sub, read, _collection, cache, count):
+    """Scatter the grass the way the engine scatters it.
+
+    The library comes in once, hidden, and every blade is a linked copy of one
+    of its meshes -- the same shape as the rest of the region, where one model
+    is imported once and placed many times. Where each blade stands comes from
+    `divinity2.vegetation`, which runs the engine's own generator; see
+    `docs/vegetation.md`.
+    """
+    library = _collection("vegetation library")
+    made = _import_into(read.vegetation, game_root, cache, library)
+    library.hide_viewport = True
+
+    # `dv2_path`'s second element is the `sNifFile` the plant table names.
+    meshes = {}
+    for obj in made:
+        parts = str(obj.get("dv2_path", "")).split("/")
+        if len(parts) > 1:
+            meshes.setdefault(parts[1], []).append(obj)
+    if not meshes:
+        return
+
+    recipe = dv2_vegetation.read(game_root, name, sub)
+    into = _collection("vegetation")
+    for plant in dv2_vegetation.scatter(recipe):
+        source = meshes.get(recipe.plants[plant.plant].model)
+        if not source:
+            continue
+        where = (Matrix.Translation((plant.x, plant.y, plant.z))
+                 @ Matrix.Rotation(plant.rotation * 2.0 * math.pi, 4, "Z")
+                 @ Matrix.Scale(plant.size, 4))
+        for root in _copy(source, where, into, plant.plant):
+            root["dv2_kind"] = "vegetation"
+            root["dv2_plant"] = plant.plant
+            root["dv2_colour"] = plant.colour
+        count("vegetation")
+
+
+def import_region(game_root, name: str, sub: str = "Main", time: str = "",
                   kinds=KINDS, cache=None) -> Built:
     """Build one region, or -- with `sub=ALL` -- all of its sub-regions.
 

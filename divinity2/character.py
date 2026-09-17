@@ -13,8 +13,10 @@ family and usually no skeleton.
 See `docs/cat.md` for the `.cat` block layout, `docs/assets.md` for the rest.
 """
 
+import struct
 from dataclasses import dataclass, field
-from pathlib import Path
+from functools import lru_cache
+from pathlib import Path, PureWindowsPath
 
 from .nif import read_nif
 
@@ -57,6 +59,9 @@ class Mesh:
 
     name: str
     root: object  # NiNode
+    #: The part's `MdlMan::CMeshEntry` (`texture_base`, `extra_data`, `search`),
+    #: None where the table has no entry; see `mesh_entry`.
+    entry: dict | None = None
 
 
 @dataclass
@@ -161,6 +166,96 @@ def read_asset(path: str | Path) -> Character:
     )
 
 
+#: The table `CMdlManMapper::Initialize` @0x68a2e0 loads, beside the templates' folder.
+MESH_ENTRIES = "MdlManBinary.nif"
+
+
+@lru_cache(maxsize=4)
+def model_manager(path: str | Path) -> dict:
+    """What `MdlManBinary.nif` says about character parts.
+
+    - `entries`: the `CMeshEntry` blocks by part name in lower case.
+      `CMeshEntry::LoadBinary` @0x1092340: string name, string texture base,
+      string extra data, u8 search extra textures, u32 name id, link property
+      group. The engine re-binds a part's maps by the entry's texture base
+      (`CMeshWrapper::SetupTexturingProperty` @0xc9de80;
+      docs/sources.md, "Character part maps"). Measured: 828, no name twice.
+    - `templates`: each `CModelTemplate`'s slot assignments, template name in
+      lower case -> the entry names it assigns (u32 name, u32, u32 prototype,
+      u32 properties, u32 count, then count pairs of sized strings, slot and
+      entry; `dv2mod.core.nifpatch.read_model_template`, which round-trips).
+    - `meshes`: each `CMesh` block's name in lower case -> the entries it links
+      (u32 source file, u32 name, u8, u32 slot hash, u32 count, then count pairs
+      of u32 hash and a block link; `nifpatch.read_mesh`). Measured: the links
+      resolve to `CMeshEntry` blocks, and `Pig` links `Pig_Body_A`, the entry
+      `Pig_A`'s template assigns, where the part's own file is `Pig.nif`.
+
+    nifgen has no such blocks, so the header is walked as
+    `dv2mod.core.nifpatch.parse_header` walks it. Empty when the file is not there.
+    """
+    path = Path(path)
+    out = {"entries": {}, "templates": {}, "meshes": {}}
+    if not path.is_file():
+        return out
+    data = path.read_bytes()
+    u32 = lambda at: struct.unpack_from("<I", data, at)[0]   # noqa: E731
+    at = data.index(b"\n") + 1 + 4 + 1 + 4                  # version, endian, user version
+    blocks = u32(at); at += 4
+    types = []
+    count = struct.unpack_from("<H", data, at)[0]; at += 2
+    for _ in range(count):
+        n = u32(at); types.append(data[at + 4:at + 4 + n].decode("latin-1")); at += 4 + n
+    kinds = struct.unpack_from(f"<{blocks}H", data, at); at += 2 * blocks
+    sizes = struct.unpack_from(f"<{blocks}I", data, at); at += 4 * blocks
+    strings = []
+    count = u32(at); at += 8                                   # count, longest
+    for _ in range(count):
+        n = u32(at); strings.append(data[at + 4:at + 4 + n].decode("latin-1")); at += 4 + n
+    at += 4 + 4 * u32(at)                                      # groups
+    text = lambda i: strings[i] if 0 <= i < len(strings) else None   # noqa: E731
+
+    starts, names = [], {}
+    for kind, size in zip(kinds, sizes):
+        starts.append(at)
+        at += size
+    for index, (kind, start) in enumerate(zip(kinds, starts)):
+        if types[kind & 0x7FFF] == "CMeshEntry":
+            name, base, extra = struct.unpack_from("<IIi", data, start)
+            names[index] = text(name)
+            out["entries"][text(name).lower()] = {"name": text(name), "texture_base": text(base),
+                                                  "extra_data": text(extra), "search": bool(data[start + 12])}
+    for kind, start in zip(kinds, starts):
+        kind = types[kind & 0x7FFF]
+        if kind == "CModelTemplate":
+            name, count = u32(start), u32(start + 16)
+            pos, assigned = start + 20, set()
+            for _ in range(count):
+                pos += 4 + u32(pos)                            # the slot
+                n = u32(pos)
+                entry = data[pos + 4:pos + 4 + n].rstrip(b"\0").decode("latin-1")
+                pos += 4 + n
+                if entry:
+                    assigned.add(entry)
+            out["templates"].setdefault(text(name).lower(), set()).update(assigned)
+        elif kind == "CMesh":
+            name, count = u32(start + 4), u32(start + 13)
+            linked = out["meshes"].setdefault(text(name).lower(), set())
+            linked.update(names[u32(start + 17 + 8 * i + 4)] for i in range(count)
+                          if u32(start + 17 + 8 * i + 4) in names)
+    return out
+
+
+def mesh_entry(path: str | Path, template: str, part: str) -> dict | None:
+    """The `CMeshEntry` a template draws a part with: of the entries the
+    template assigns, the one that is the part itself or that a `CMesh` of the
+    part's name links. None when the table names none, or more than one."""
+    manager = model_manager(path)
+    assigned = {e.lower() for e in manager["templates"].get(template.lower(), ())}
+    stem = PureWindowsPath(part).stem.lower()
+    found = ({stem} | {e.lower() for e in manager["meshes"].get(stem, ())}) & assigned
+    return manager["entries"].get(next(iter(found))) if len(found) == 1 else None
+
+
 def read_character(path: str | Path) -> Character:
     """Read a `.cat` into plain data. Knows nothing about Blender."""
     path = Path(path)
@@ -180,7 +275,9 @@ def read_character(path: str | Path) -> Character:
             character.skeleton = entry.skeleton_data_reference
 
         elif kind == MESH:
-            character.meshes.append(Mesh(name=name, root=entry.mesh_data_reference))
+            character.meshes.append(Mesh(
+                name=name, root=entry.mesh_data_reference,
+                entry=mesh_entry(path.parent.parent / MESH_ENTRIES, path.stem, name)))
 
         elif kind == ANIMATION_SET:
             character.animation_set = bytes(entry.binary_data)

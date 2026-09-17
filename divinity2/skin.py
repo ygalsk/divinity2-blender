@@ -75,19 +75,18 @@ def weights(shape, count: int) -> dict:
     return out
 
 
-def to_rest_pose(vertices: np.ndarray, shape, rest: dict) -> np.ndarray | None:
-    """Deform a shape into the armature's rest pose, once, at import.
+def rest_matrices(shape, rest: dict, count: int) -> np.ndarray | None:
+    """Each vertex's blended 4x4 into the armature's rest pose, once, at import.
 
     `rest` maps a bone name to its 4x4 world matrix in the skeleton, in game
     units. Bones the armature does not have are dropped and the remaining
     weights renormalised, so a shape bound to a bone that was never built
-    still arrives whole.
+    still arrives whole. None when the shape is not skinned to any of them.
     """
     into_bone = bone_matrices(shape)
     if not into_bone:
         return None
 
-    count = len(vertices)
     per_bone = weights(shape, count)
     total = np.zeros((count, 4, 4), dtype=np.float64)
     mass = np.zeros(count, dtype=np.float64)
@@ -109,9 +108,22 @@ def to_rest_pose(vertices: np.ndarray, shape, rest: dict) -> np.ndarray | None:
 
     total[bound] /= mass[bound, None, None]
     total[~bound] = np.eye(4)
+    return total
 
+
+def to_rest_pose(vertices: np.ndarray, total: np.ndarray) -> np.ndarray:
+    """Positions moved by `rest_matrices`."""
     homogeneous = np.concatenate(
-        [vertices, np.ones((count, 1), dtype=np.float64)], axis=1
+        [vertices, np.ones((len(vertices), 1), dtype=np.float64)], axis=1
     )
-    moved = np.einsum("nij,nj->ni", total, homogeneous)
-    return moved[:, :3]
+    return np.einsum("nij,nj->ni", total, homogeneous)[:, :3]
+
+
+def rotate(directions: np.ndarray, total: np.ndarray) -> np.ndarray:
+    """Normals and binormals moved the way the engine skins them: by the 3x3 of
+    the same blended matrix, with no inverse transpose, then normalised
+    (Developer's Cut skinned vertex shader, cache @0x7d1a;
+    docs/sources.md, "Skinned normals")."""
+    moved = np.einsum("nij,nj->ni", total[:, :3, :3], directions)
+    length = np.linalg.norm(moved, axis=1, keepdims=True)
+    return np.divide(moved, length, out=np.zeros_like(moved), where=length > 0)

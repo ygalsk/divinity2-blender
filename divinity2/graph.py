@@ -29,6 +29,29 @@ engine is unambiguous: `NiAVObject::GetAppCulled` is
 **Which child of a chooser.** `NiLODNode` is a `NiSwitchNode`, and one child
 is active at a time. See `divinity2.lod`.
 
+**Whether it has a texture.** A shape with no `NiTexturingProperty` is not
+drawn, and this is not a guess about art: `CShadingTools::SetupStandardData`
+tests `NiAVObject::GetProperty(8)` -- the texturing slot -- and where it is
+missing it does `m_uFlags |= 1`, which is `APP_CULLED`. It does the same for
+a shape whose model data carries no texture coordinates
+(`m_usDataFlags & 0x3f`). Everything the game shades forward passes through
+it: `CRegionVisual::ParseRegionNode`, `CStaticAssetDataManager` and the
+terrain manager all call `SetupForwardShadingMaterial`, which calls it.
+
+**The ground is the exception**, and the engine makes it too: a terrain patch
+is textured from `Terrain.xml`, not from the model, and
+`CTerrainPatchLOD::RecreateForwardShadingPropertyState` builds its property
+state afterwards. So a shape inside a `Terrain_Patch_<n>` keeps its place
+whatever the model says, and `divinity2.terrain.patch_of` is the same test
+the rest of the add-on already uses for it.
+
+In Banditcamp the rule catches eight shapes: the six effect proxies, which
+the marker rule already caught, and the two untextured halves of
+**`BC_ShadowHide_01`** -- the hundred-and-seventeen-metre block that stood in
+the middle of every screenshot for a week. The other two shapes under that
+same node do carry a texture, and they stay: one of them is the temple
+floor.
+
 **The markers the region reader looks for.** `CRegionVisual::ParseRegionNode`
 reads a node's `NiStringExtraData` and turns some of them into something that
 is not geometry at all: `effectproxy = yes` becomes a particle system loaded
@@ -45,13 +68,17 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import lod
+from . import lod, terrain as dv2_terrain
 
 #: The two kinds of node that carry geometry.
 SHAPES = ("NiTriShape", "NiTriStrips")
 
 #: A chooser: one child is active, the rest are not drawn.
 SWITCH = ("NiLODNode", "NiSwitchNode")
+
+#: `NiProperty::GetType` for the texturing slot, which is the one
+#: `CShadingTools::SetupStandardData` asks for by number.
+TEXTURING = "NiTexturingProperty"
 
 #: A marker, and what the engine builds from the node instead of a mesh.
 #: From `CRegionVisual::ParseRegionNode`; `docs/regions.md` has the whole
@@ -108,10 +135,6 @@ def matrix_of(node) -> np.ndarray:
     t = node.translation
     m[:3, 3] = (t.x, t.y, t.z)
     return m
-
-
-def _children(node):
-    return [c for c in (getattr(node, "children", ()) or []) if c is not None]
 
 
 def _markers(node) -> dict:
@@ -174,6 +197,9 @@ def walk(root, keep_hidden: bool = True):
             data = getattr(node, "data", None)
             if data is None or not data.num_vertices:
                 continue
+            if TEXTURING not in state and dv2_terrain.patch_of(path) is None:
+                # `CShadingTools::SetupStandardData` culls it outright.
+                continue
             why, invisible = reason, hidden
             proxy = _proxy(marks, path)
             if proxy is not None:
@@ -194,7 +220,7 @@ def walk(root, keep_hidden: bool = True):
             )
             continue
 
-        children = _children(node)
+        children = lod.child_nodes(node)
         if kind in SWITCH:
             show, rest = lod.lod_children(node)
             for child in reversed(rest):
